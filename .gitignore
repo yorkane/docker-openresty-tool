@@ -1,6 +1,12 @@
 # Compiled Lua sources
 luac.out
-
+nginx.pid
+nginx/lua/env.lua
+/tmp
+/temp
+/*tmp
+/*temp
+*.log
 # luarocks build files
 *.src.rock
 *.zip
