@@ -65,4 +65,4 @@ ENTRYPOINT ["/usr/local/openresty/entrypoint.sh"]
 STOPSIGNAL SIGQUIT
 
 
-# docker build ./ -t docker-openresty-tool:1
+# docker build ./ -t yorkane/docker-openresty-tool:latest
