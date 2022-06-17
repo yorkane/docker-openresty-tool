@@ -1,4 +1,3 @@
--- For testing
 local say, nexec, nvar, print, floor = ngx.say, ngx.exec, ngx.var, ngx.print, math.floor
 local nmatch, gmatch, byte, char, sfind, is_empty, ssub = ngx.re.match, ngx.re.gmatch, string.byte, string.char, string.find, string.sub
 local insert, concat, format = table.insert, table.concat, string.format
