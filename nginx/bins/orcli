@@ -1,0 +1,45 @@
+#!/usr/bin/env sh
+#ln -s /usr/local/openresty/nginx/bins/orcli /usr/local/sbin/orcli
+while getopts :l:i:s:c:d opts; do
+    case $opts in
+        l) level=$OPTARG;;
+        i) includes=$OPTARG ;;
+        s) shdicts=$OPTARG ;;
+        c) envs=$OPTARG ;;
+        ?) ;;
+    esac
+done
+
+
+if [ -z $level ]; then
+		level="warn"
+fi
+
+includes=' '
+shdicts=' '
+if [ -z $ORRoot ]; then
+    ORRoot=/usr/local/openresty/nginx/
+fi
+
+if [ -z $envs ]; then
+export ORMode=development
+envs=development
+else
+export ORMode=${envs#=}
+fi
+
+
+#echo "level=$level"
+#echo "i=$includes"
+#echo "s=$shdicts"
+#echo "class=$class"
+#if [ -z $class ]; then
+#	echo '`-c class.name `class name could not empty!'
+#exit 0
+#fi
+echo "root at $ORRoot, level$level environment$envs"
+
+resty -c 1024 --errlog-level ${level#=} -I ${ORRoot}lua -I ${ORRoot} -I ${ORRoot}lib -I `pwd` -I `pwd`/lib $includes --shdict "cache 50m" $shdicts ${ORRoot}bins/orcli-lite.lua $@
+
+
+exit 0
