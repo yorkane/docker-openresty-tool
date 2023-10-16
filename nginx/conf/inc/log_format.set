@@ -1,0 +1,8 @@
+# Default nginx log-format
+log_format  main  '$remote_addr - $remote_user $http_x_bakey [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for" $request_time';
+
+log_format  xbakey  '$remote_addr - $remote_user $http_x_bakey [$time_local] '
+                       '"$request" $status $bytes_sent '
+                       '"$http_referer" "$http_user_agent" "$http_x_forwarded_for" $request_time';

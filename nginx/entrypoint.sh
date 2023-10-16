@@ -1,6 +1,18 @@
 #!/bin/sh
 
 echo 'Start initialization!'
+export NGX_APP=${NGX_APP:-default_app}
+export NGX_PID=${NGX_PID:-$HOSTNAME.pid}
+export NGX_PORT=${NGX_PORT:-80}
+export NGX_WORKER=${NGX_WORKER:-auto}
+export NGX_HOST=${NGX_HOST:-_}
+export NGX_LOG_FILE=${NGX_LOG_FILE:-false}
+export NGX_LOG_LEVEL=${NGX_LOG_LEVEL:-warn}
+export NGX_OVERWRITE_CONFIG=${NGX_OVERWRITE_CONFIG:-true}
+export NGX_DNS=${NGX_DNS:-local=on valid=60s}
+export NGX_DNS_TIMEOUT=${NGX_DNS_TIMEOUT:-5}
+export NGX_CUSTOM_DNS=${NGX_CUSTOM_DNS:-false}
+export NGX_CACHE_SIZE=${NGX_CACHE_SIZE:-10m}
 export request_uri='$request_uri'
 export upstream_host='$upstream_host'
 export host='$host'
@@ -16,6 +28,14 @@ if [ "$NGX_LOG_FILE" != "true" ]; then
 	ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log
 	ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log
 fi
+
+if [ $NGX_OVERWRITE_CONFIG == 'true' ] || [ ! -f "/usr/local/openresty/nginx/conf/nginx.conf" ]; then
+	echo 'No nginx.conf found, building from environment variables'
+	rm /usr/local/openresty/nginx/conf/nginx.conf -f;
+	envsubst < /usr/local/openresty/nginx/conf/tpl.nginx.conf > /usr/local/openresty/nginx/conf/nginx.conf
+fi
+
+
 
 cd /usr/local/openresty/nginx/lua/
 echo 'Generating /usr/local/openresty/nginx/env.lua from Environment Variables'
@@ -51,5 +71,8 @@ nginx -g 'daemon off;'
 else
 exec $@
 fi
+
+echo -e 'Start failed please check config !\n====================conf/nginx.conf====================\n'
+tail -n 40 /usr/local/openresty/nginx/conf/nginx.conf
 
 exit 0
