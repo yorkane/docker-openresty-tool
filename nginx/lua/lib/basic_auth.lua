@@ -1,4 +1,4 @@
-local split, find = require("ngx.re").split, string.find
+local split, find, next = require("ngx.re").split, string.find, next
 local ngsub, nmatch, decode_base64 = ngx.re.gsub, ngx.re.match, ngx.decode_base64
 local ok, env = pcall(require, 'env')
 if not ok then
@@ -75,7 +75,6 @@ function _M.handle(conf)
         conf = conf or env.auth_conf
     end
 
-
     local ip = ngx.var.http_x_forwarded_for or ngx.var.remote_addr
     local ua = ngx.req.get_headers(100)[conf.auth_key or 'x-bakey'] or 0
     if ip == '127.0.0.1' or conf.ip[ip] == 1 then
@@ -89,6 +88,9 @@ function _M.handle(conf)
     end
     if conf.ua[ua] == 0 then
         return set_resp(403, "no access")
+    end
+    if not next(conf.user) then
+        return
     end
 
     local auth_header = ngx.var.http_authorization

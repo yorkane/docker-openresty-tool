@@ -2,6 +2,7 @@
 luac.out
 /nginx/lua/_env.lua
 /nginx/lua/env.lua
+/nginx/logs/*
 /tmp
 /temp
 /*tmp
