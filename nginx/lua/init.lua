@@ -1,4 +1,6 @@
 -- global init here
+local env = require('env')
+if env.OR_ACME then
 require("resty.acme.autossl").init({
 	-- setting the following to true
 	-- implies that you read and accepted https://letsencrypt.org/repository/
@@ -13,3 +15,4 @@ require("resty.acme.autossl").init({
 	account_email = "youemail@youdomain.com",
 	domain_whitelist = { "example.com" },
 })
+end

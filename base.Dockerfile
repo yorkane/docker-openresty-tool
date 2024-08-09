@@ -2,23 +2,32 @@
 # https://github.com/openresty/docker-openresty
 
 ARG RESTY_IMAGE_BASE="alpine"
-ARG RESTY_IMAGE_TAG="3.18"
+ARG RESTY_IMAGE_TAG="3.20"
 
 FROM ${RESTY_IMAGE_BASE}:${RESTY_IMAGE_TAG}
 
-LABEL maintainer="Evan Wies <evan@neomantra.net>"
+# Custom preconfig Start
+WORKDIR /usr/local/openresty/nginx
+ENV TZ=Asia/Shanghai
+ARG NGINX_DAV_EXT_VER="4.0.1"
+ARG NGINX_FANCYINDEX_VER="0.5.2"
+RUN ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo Asia/Shanghai > /etc/timezone &&\
+	echo 'ls -lta "$@"' > /usr/bin/ll && chmod 755 /usr/bin/ll &&\
+	mkdir -p /data/cache/stale_cache/ && chmod a+rwx /data/ -R &&\
+	sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
+# Custom preconfig End
 
 # Docker Build Arguments
 ARG RESTY_IMAGE_BASE="alpine"
-ARG RESTY_IMAGE_TAG="3.18"
-ARG RESTY_VERSION="1.21.4.2"
+ARG RESTY_IMAGE_TAG="3.20"
+ARG RESTY_VERSION="1.25.3.2"
 ARG RESTY_OPENSSL_VERSION="1.1.1w"
 ARG RESTY_OPENSSL_PATCH_VERSION="1.1.1f"
-ARG RESTY_OPENSSL_URL_BASE="https://www.openssl.org/source"
+ARG RESTY_OPENSSL_URL_BASE="https://www.openssl.org/source/old/1.1.1"
 ARG RESTY_PCRE_VERSION="8.45"
 ARG RESTY_PCRE_BUILD_OPTIONS="--enable-jit"
 ARG RESTY_PCRE_SHA256="4e6ce03e0336e8b4a3d6c2b70b1c5e18590a5673a98186da90d4f33c23defc09"
-ARG RESTY_J="4"
+ARG RESTY_J="8"
 ARG RESTY_CONFIG_OPTIONS="\
     --with-compat \
     --with-file-aio \
@@ -26,10 +35,10 @@ ARG RESTY_CONFIG_OPTIONS="\
     --with-http_auth_request_module \
     --with-http_dav_module \
     --with-http_flv_module \
-#    --with-http_geoip_module=dynamic \
-#    --with-http_gunzip_module \
-#    --with-http_gzip_static_module \
-#    --with-http_image_filter_module=dynamic \
+    --with-http_geoip_module=dynamic \
+    --with-http_gunzip_module \
+    --with-http_gzip_static_module \
+    --with-http_image_filter_module=dynamic \
     --with-http_mp4_module \
     --with-http_random_index_module \
     --with-http_realip_module \
@@ -37,28 +46,60 @@ ARG RESTY_CONFIG_OPTIONS="\
     --with-http_slice_module \
     --with-http_ssl_module \
     --with-http_stub_status_module \
-#   --with-http_sub_module \
+    --with-http_sub_module \
     --with-http_v2_module \
-#    --with-http_xslt_module=dynamic \
+    --with-http_v3_module \
+    --with-http_xslt_module=dynamic \
     --with-ipv6 \
-#    --with-mail \
-#    --with-mail_ssl_module \
+    --with-mail \
+    --with-mail_ssl_module \
     --with-md5-asm \
     --with-sha1-asm \
     --with-stream \
     --with-stream_ssl_module \
     --with-threads \
-    --add-module=/tmp/nginx-dav-ext-module-master \
     "
-ARG RESTY_CONFIG_OPTIONS_MORE=""
+
+# Custom config Start
+ARG RESTY_CONFIG_OPTIONS_MORE=" --add-module=/tmp/nginx-dav-ext-module-${NGINX_DAV_EXT_VER} \
+  --add-module=/tmp/ngx-fancyindex-${NGINX_FANCYINDEX_VER}"
 ARG RESTY_LUAJIT_OPTIONS="--with-luajit-xcflags='-DLUAJIT_NUMMODE=2 -DLUAJIT_ENABLE_LUA52COMPAT'"
 ARG RESTY_PCRE_OPTIONS="--with-pcre-jit"
 
-ARG RESTY_ADD_PACKAGE_BUILDDEPS=""
-ARG RESTY_ADD_PACKAGE_RUNDEPS=""
-ARG RESTY_EVAL_PRE_CONFIGURE=""
+ARG RESTY_ADD_PACKAGE_BUILDDEPS="lua5.1-dev gcc libc-dev make"
+ARG RESTY_ADD_PACKAGE_RUNDEPS="luarocks5.1 tree curl tzdata libstdc++ gnu-libiconv zziplib-dev libarchive-tools envsubst"
+ARG RESTY_EVAL_PRE_CONFIGURE="mv /usr/bin/luarocks-5.1  /usr/bin/luarocks && \
+export LUAJIT_DIR=/usr/local/openresty/luajit  && \
+luarocks install luasocket && \
+luarocks install luazip && \
+cd /tmp/ && wget https://github.com/mid1221213/nginx-dav-ext-module/archive/v${NGINX_DAV_EXT_VER}.tar.gz \
+    -O /tmp/nginx-dav-ext-module-v${NGINX_DAV_EXT_VER}.tar.gz && \
+  wget https://github.com/aperezdc/ngx-fancyindex/archive/v${NGINX_FANCYINDEX_VER}.tar.gz \
+    -O /tmp/ngx-fancyindex-v${NGINX_FANCYINDEX_VER}.tar.gz && ls *.gz | xargs -n1 tar -xzf"
 ARG RESTY_EVAL_POST_DOWNLOAD_PRE_CONFIGURE=""
-ARG RESTY_EVAL_POST_MAKE=""
+ARG RESTY_EVAL_POST_MAKE="rm -rf /tmp/* && \
+luarocks install lua-resty-http && luarocks install lua-resty-redis-connector && luarocks install lua-resty-template && luarocks install lua-ffi-zlib &&\
+    cd /usr/local/share/lua/5.1/ && mkdir resty -p && \
+	wget 'https://raw.githubusercontent.com/semyon422/luajit-iconv/master/init.lua' -O libiconv.lua && \
+	wget 'https://raw.githubusercontent.com/spacewander/luafilesystem/master/lfs_ffi.lua' && \
+	cd resty && \
+	wget 'https://raw.githubusercontent.com/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua' && \
+	wget 'https://raw.githubusercontent.com/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua'  && \
+	wget 'https://raw.githubusercontent.com/openresty/lua-resty-shell/master/lib/resty/shell.lua' && \
+	wget 'https://raw.githubusercontent.com/yorkane/lua-resty-ctxvar/main/lib/resty/ctxvar.lua' && \
+    cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*main/lib/* /usr/local/share/lua/5.1/ &&\
+    cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/openresty/lua-resty-lrucache/archive/refs/heads/master.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
+    cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/openresty/lua-resty-string/archive/refs/heads/master.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
+cd /usr/local/openresty/ && rm -rf luajit/lib/*.a openssl/include openssl/lib/*.a pcre/lib/*.a pcre/share resty.index pod nginx/conf/*.default &&\
+mv /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/ &&\
+sed -i 's@/usr/local/openresty/nginx/sbin/nginx@/usr/local/bin/nginx@' /usr/local/openresty/bin/resty &&\
+mkdir /usr/include/ -p && cp /usr/local/openresty/luajit/include/luajit-2.1/*.* /usr/include/ &&\
+ln -sf /usr/local/bin/nginx /usr/local/openresty/bin/openresty &&\
+ln -sf /usr/local/share/lua/5.1 /usr/local/openresty/site/lua &&\
+rm -rf /tmp/* /var/cache/luarocks &&\
+echo 'Custom module installed'"
+# Custom config End
+
 
 # These are not intended to be user-specified
 ARG _RESTY_CONFIG_DEPS="--with-pcre \
@@ -86,10 +127,7 @@ LABEL resty_eval_post_make="${RESTY_EVAL_POST_MAKE}"
 LABEL resty_luajit_options="${RESTY_LUAJIT_OPTIONS}"
 LABEL resty_pcre_options="${RESTY_PCRE_OPTIONS}"
 
-
-RUN echo 'ls -la "$@"' > /usr/bin/ll && chmod 755 /usr/bin/ll && \
-	sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories && \
-    apk add --no-cache --virtual .build-deps \
+RUN apk add --no-cache --virtual .build-deps \
         build-base \
         coreutils \
         curl \
@@ -98,23 +136,21 @@ RUN echo 'ls -la "$@"' > /usr/bin/ll && chmod 755 /usr/bin/ll && \
         libxslt-dev \
         linux-headers \
         make \
-        cmake \
         perl-dev \
         readline-dev \
         zlib-dev \
-        unzip luarocks5.1 lua5.1-dev gcc libc-dev make zziplib-dev \
-        ${RESTY_ADD_PACKAGE_BUILDDEPS} &&\
-    apk add --no-cache \
+        ${RESTY_ADD_PACKAGE_BUILDDEPS} \
+    && apk add --no-cache \
         gd \
         geoip \
         libgcc \
         libxslt \
         zlib \
-        curl libarchive-tools tree gettext-envsubst \
         ${RESTY_ADD_PACKAGE_RUNDEPS} \
     && cd /tmp \
     && if [ -n "${RESTY_EVAL_PRE_CONFIGURE}" ]; then eval $(echo ${RESTY_EVAL_PRE_CONFIGURE}); fi \
     && cd /tmp \
+    && echo curl -fSL "${RESTY_OPENSSL_URL_BASE}/openssl-${RESTY_OPENSSL_VERSION}.tar.gz" -o openssl-${RESTY_OPENSSL_VERSION}.tar.gz \
     && curl -fSL "${RESTY_OPENSSL_URL_BASE}/openssl-${RESTY_OPENSSL_VERSION}.tar.gz" -o openssl-${RESTY_OPENSSL_VERSION}.tar.gz \
     && tar xzf openssl-${RESTY_OPENSSL_VERSION}.tar.gz \
     && cd openssl-${RESTY_OPENSSL_VERSION} \
@@ -148,14 +184,9 @@ RUN echo 'ls -la "$@"' > /usr/bin/ll && chmod 755 /usr/bin/ll && \
         ${RESTY_PCRE_BUILD_OPTIONS} \
     && make -j${RESTY_J} \
     && make -j${RESTY_J} install \
-    && echo "pcre installed" \
     && cd /tmp \
     && curl -fSL https://openresty.org/download/openresty-${RESTY_VERSION}.tar.gz -o openresty-${RESTY_VERSION}.tar.gz \
     && tar xzf openresty-${RESTY_VERSION}.tar.gz \
-    && echo "openresty download finished" \
-    cd /tmp/ && curl -fSL https://github.com/arut/nginx-dav-ext-module/archive/master.zip -o dav-ext-module.zip \
-    && unzip dav-ext-module.zip \
-    && echo "extend modules download finished" \
     && cd /tmp/openresty-${RESTY_VERSION} \
     && if [ -n "${RESTY_EVAL_POST_DOWNLOAD_PRE_CONFIGURE}" ]; then eval $(echo ${RESTY_EVAL_POST_DOWNLOAD_PRE_CONFIGURE}); fi \
     && eval ./configure -j${RESTY_J} ${_RESTY_CONFIG_DEPS} ${RESTY_CONFIG_OPTIONS} ${RESTY_CONFIG_OPTIONS_MORE} ${RESTY_LUAJIT_OPTIONS} ${RESTY_PCRE_OPTIONS} \
@@ -163,89 +194,28 @@ RUN echo 'ls -la "$@"' > /usr/bin/ll && chmod 755 /usr/bin/ll && \
     && make -j${RESTY_J} install \
     && cd /tmp \
     && if [ -n "${RESTY_EVAL_POST_MAKE}" ]; then eval $(echo ${RESTY_EVAL_POST_MAKE}); fi \
-    # && apk del .build-deps \
+    && apk del .build-deps \
     && mkdir -p /var/run/openresty \
-    # && ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log \
-    # && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log
-# ---- Original Builder Ends ----    
-    && mv /usr/bin/envsubst /usr/local/bin/ && \
-    ln -sf /usr/bin/luarocks-5.1 /usr/bin/luarocks && \
-    mkdir -p /usr/local/openresty/lua/ /usr/local/openresty/site/lualib/resty/ && \
-    cd /usr/local/openresty/site/lualib/ && mkdir klib -p && \
-    LUAJIT_DIR=/usr/local/openresty/luajit && \
-    luarocks install luasocket && \
-    luarocks install luazip && \
-    luarocks install lua-vips && \
-    luarocks install rapidjson && \
-    luarocks install aspect && \
-    luarocks install xml2lua && \
-	luarocks install lua-resty-http && \
-	luarocks install lua-resty-redis-connector && \
-    luarocks install lua-resty-template && \
-    luarocks install lua-ffi-zlib && \
-    luarocks install lua-resty-acme && \
-    luarocks install lua-resty-openssl && \
-    cd /usr/local/openresty/site/lualib/ && mkdir klib -p && \
-    wget 'https://raw.githubusercontent.com/semyon422/luajit-iconv/master/init.lua' -O libiconv.lua && \
-    wget 'https://raw.githubusercontent.com/spacewander/luafilesystem/master/lfs_ffi.lua' && \
-    cd /usr/local/openresty/site/lualib/resty/ && \
-    wget 'https://raw.githubusercontent.com/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua' && \
-    wget 'https://raw.githubusercontent.com/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua'  && \
-    wget 'https://raw.githubusercontent.com/openresty/lua-resty-shell/master/lib/resty/shell.lua' && \
-    wget 'https://raw.githubusercontent.com/yorkane/lua-resty-ctxvar/main/lib/resty/ctxvar.lua' && \
-    cd /tmp/ && mkdir _tmp_ && \
-    curl -Lk "https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.zip" | bsdtar -xkf- -C _tmp_ && tree && \
-    cd _tmp_/*main/lib/ && mv * /usr/local/openresty/site/lualib/ && \
-    rm /tmp/ -rf && mkdir /tmp/ &&\
-    rm /usr/local/openresty/pod/ -rf && \
-    mv /usr/local/openresty/nginx/sbin/nginx /usr/local/openresty/bin/ && \
-    ln -sf /usr/local/openresty/bin/nginx /usr/local/openresty/bin/openresty && \
-    # mv /usr/local/openresty/nginx/modules /usr/local/openresty/ -f && \
-    rm -rf /usr/local/openresty/nginx/ && \
-    # apk  --no-cache add unrar --repository=http://mirrors.ustc.edu.cn/alpine/v3.14/main && \
-    sed -i "1iexport PERL5LIB=/usr/local/openresty/nginx/"  /etc/profile &&\
-    sed -i "1iexport LUA_PATH='/usr/local/openresty/nginx/lua/?.lua;/usr/local/openresty/nginx/lua/?/init.lua;/usr/local/openresty/site/lualib/?.ljbc;/usr/local/openresty/site/lualib/?/init.ljbc;/usr/local/openresty/lualib/?.ljbc;/usr/local/openresty/lualib/?/init.ljbc;/usr/local/openresty/site/lualib/?.lua;/usr/local/openresty/site/lualib/?/init.lua;/usr/local/openresty/lualib/?.lua;/usr/local/openresty/lualib/?/init.lua;./?.lua;	/usr/local/openresty/luajit/share/luajit-2.1.0-beta3/?.lua;/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/local/openresty/luajit/share/lua/5.1/?.lua;/usr/local/openresty/luajit/share/lua/5.1/?/init.lua;'" /etc/profile &&\
-    sed -i "1iexport LUA_CPATH='/usr/local/openresty/site/lualib/?.so;/usr/local/openresty/lualib/?.so;./?.so;/usr/local/lib/lua/5.1/?.so;/usr/local/openresty/luajit/lib/lua/5.1/?.so;/usr/local/lib/lua/5.1/loadall.so;/usr/local/openresty/luajit/lib/lua/5.1/?.so;'"  /etc/profile &&\
-    apk del .build-deps && \
-    echo "Openresty install Finished"
+    && ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log \
+    && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log
 
+# Add additional binaries into PATH for convenience
+ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/bin:/usr/local/openresty/nginx/bins \
+LUA_PATH="/usr/local/openresty/nginx/lua/?.lua;/usr/local/openresty/nginx/lua/?/init.lua;/usr/local/openresty/site/lua/?.lua;/usr/local/openresty/site/lua/?/init.lua;/usr/local/openresty/site/lualib/?.lua;/usr/local/openresty/site/lualib/?/init.lua;/usr/local/openresty/lualib/?.lua;/usr/local/openresty/lualib/?/init.lua;./?.lua;/usr/local/openresty/site/lualib/?.ljbc;/usr/local/openresty/site/lualib/?/init.ljbc;/usr/local/openresty/lualib/?.ljbc;/usr/local/openresty/lualib/?/init.ljbc;/usr/local/openresty/luajit/share/luajit-2.1/?.lua;/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;/usr/local/openresty/luajit/share/lua/5.1/?.lua;/usr/local/openresty/luajit/share/lua/5.1/?/init.lua;" \
+LUA_CPATH="/usr/local/openresty/nginx/lua/?.so/usr/local/openresty/site/lualib/?.so;/usr/local/openresty/lualib/?.so;./?.so;/usr/local/lib/lua/5.1/?.so;/usr/local/openresty/luajit/lib/lua/5.1/?.so;/usr/local/lib/lua/5.1/loadall.so;/usr/local/openresty/luajit/lib/lua/5.1/?.so;" \
+GID=1000 \
+UID=1000
 
-ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/nginx/bins:/usr/local/openresty/bin \
-NGX_APP=default_app \
-NGX_PORT=80 \
-NGX_WORKER=auto \
-NGX_HOST=_ \
-NGX_LOG_LEVEL=warn \
-NGX_OVERWRITE_CONFIG=true \
-OR_REDIS_URL=redis://passwd@127.0.0.1:6379/0 \
-OR_AUTH_USER=xbakey:password \
-OR_AUTH_IP=127.0.0.1=1,192.168.0.10=0 \
-OR_AUTH_KEY=x-bakey \
-OR_AUTH_KEY_SECRET=fookey1,wookey2 \
-TZ=Asia/Shanghai
+CMD ["/usr/local/openresty/bin/openresty", "-g", "daemon off;"]
 
-
-
-
-COPY ./nginx /usr/local/openresty/nginx
-WORKDIR /usr/local/openresty/nginx/
-
-RUN adduser --disabled-password --gecos "" --home "$(pwd)" --no-create-home --uid 1000 app1000 &&\
-    chmod a+rwx /usr/local/openresty/nginx/entrypoint.sh && \
-    chmod a+rwx /usr/local/openresty/nginx/bins/* && \
-    chown 1000:nobody /usr/local/openresty/nginx/ -R &&\
-    mkdir /data/ &&\
-    chown 1000:nobody /data/ -R &&\
-    echo "Compact finished!"
-USER 1000
-
-# CMD ["/usr/local/openresty/bin/openresty", "-g", "daemon off;"]
-ENTRYPOINT ["/usr/local/openresty/nginx/entrypoint.sh"]
-
+# Use SIGQUIT instead of default SIGTERM to cleanly drain requests
+# See https://github.com/openresty/docker-openresty/blob/master/README.md#tips--pitfalls
 STOPSIGNAL SIGQUIT
 
+# docker stop $(docker ps -a | grep "Exited" | awk '{print $1 }')
+# docker rm $(docker ps -a | grep "Exited" | awk '{print $1 }')
+# docker rmi $(docker images | grep "none" | awk '{print $3}')
 
-# docker build ./ -t yorkane/openresty:base -f base.Dockerfile --progress=plain
-# docker run --rm -it -v ./nginx:/usr/local/openresty/nginx --name dot yorkane/openresty:base sh
-# docker save yorkane/openresty:base | xz > orap.tar.xz -v -T4
-
+# docker image prune
+# docker build  -t orabase:1 ./ -f base.Dockerfile --progress=plain 
+# docker run --rm -p 8888:80 -it --name orabase orabase:1 sh

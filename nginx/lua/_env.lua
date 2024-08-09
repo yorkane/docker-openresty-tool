@@ -3,7 +3,7 @@ return {
 	auth_conf = {
         user = { 
             -- user name and password, will be override by env.OR_AUTH_USER
-            admin2 = "admin2password", 
+            -- admin2 = "admin2password", 
             -- root1 = "root1password" 
         }, 
         ip = {

@@ -25,7 +25,6 @@ local function is_empty(str)
     end
 end
 
-
 local file_nc = 0
 local function osexec(cmd, raw)
     local s
@@ -177,6 +176,19 @@ function _M.mock()
     local tp = args['type'] or 'html'
     if tp == 'js' then
         tp = 'application/json; charset=UTF-8'
+        local obj = {
+            server_addr = ngx.var.server_addr,
+            server_port = ngx.var.server_port,
+            server_name = ngx.var.server_name,
+            host = host,
+            request_uri = ngx.var.request_uri,
+            request_headers = ngx.req.get_headers(),
+            request_args = _M.get_request_args(),
+            response_headers = ngx.resp.get_headers(),
+            body = body
+        }
+        print(json.encode(obj))
+        return
     end
     if tp == 'html' then
         tp = 'text/html; charset=UTF-8'

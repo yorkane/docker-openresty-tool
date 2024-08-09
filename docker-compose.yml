@@ -1,0 +1,20 @@
+version: "3"
+services:
+  yot:
+    image: yorkane/docker-openresty-tool:latest
+    container_name: yot
+    environment:
+      - NGX_OVERWRITE_CONFIG=true
+      - NGX_PORT=80
+      - NGX_WORKER=auto
+      - NGX_HOST=${NGX_HOST:-_}
+      - NGX_LOG_FILE=false
+      - NGX_LOG_LEVEL=warn
+      - GID=1000
+      - UID=1000
+      # - OR_AUTH_USER=admin:admin
+    volumes:
+      - /data:/webdav
+    restart: unless-stopped
+    ports:
+      - "5080:80"

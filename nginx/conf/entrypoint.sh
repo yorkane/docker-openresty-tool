@@ -21,6 +21,12 @@ export is_args='$is_args'
 export args='$args'
 export DOLLAR='$'
 
+export GID=${GID:-1000}
+export UID=${UID:-1000}
+deluser ngx_usr
+addgroup -g ${GID} -S ngx_usr
+adduser -S -D -H -u ${UID} -h /var/cache/nginx -s /sbin/nologin -G ngx_usr -g ngx_usr ngx_usr
+
 # printenv |grep -E "NGX_|OR_|OPENRESTY_"
 
 if [ "$NGX_LOG_FILE" != "true" ]; then

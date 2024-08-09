@@ -15,7 +15,7 @@ docker build ./ -t yorkane/docker-openresty-tool:latest
 ```
 docker rm -f dort1  && docker run -v `pwd`/nginx:/usr/local/openresty/nginx --name dort1 -itd yorkane/docker-openresty-tool:latest
 
-docker logs -f dort1 
+docker logs -f dort1 11
 
 
 docker exec -it dort1 sh
