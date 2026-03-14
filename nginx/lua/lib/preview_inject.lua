@@ -135,20 +135,38 @@ local JS = [[
       wrap.appendChild(aud);
       media.appendChild(wrap);
     }
+    updateDelBtn();
   }
 
   function escHtml(s){ return s.replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
+  /* ── ZIP path detection: .zip/ or .cbz/ in the path means inside archive ── */
+  function isZipPath(href){ return /\.(zip|cbz|rar|7z)\//i.test(href); }
+
+  /* ── Update delete button state based on whether current item is deletable ── */
+  function updateDelBtn(){
+    var delBtn=document.getElementById('__or_del');
+    if(!delBtn) return;
+    var inZip = items[cur] && isZipPath(items[cur].href);
+    delBtn.disabled = inZip;
+    delBtn.title = inZip ? '压缩包内文件不支持删除' : '删除 Del';
+    delBtn.style.opacity = inZip ? '0.35' : '1';
+    delBtn.style.cursor = inZip ? 'not-allowed' : 'pointer';
+  }
+
   /* ── Delete ── */
   function doDelete(){
     var item=items[cur];
+    if(isZipPath(item.href)){
+      alert('⚠️ 压缩包内文件不支持删除');
+      return;
+    }
     if(!confirm('🗑️ 确认删除？\n\n' + item.name)){return;}
     fetch('/api/rm'+item.href,{method:'DELETE'}).then(function(r){
       if(r.ok){
         // Remove the preview button and link from the page
         var btns=document.querySelectorAll('button[data-idx]');
-        // shift indices of subsequent items
         var delIdx=cur;
         btns.forEach(function(b){
           var i=parseInt(b.dataset.idx,10);
@@ -159,7 +177,11 @@ local JS = [[
         if(items.length===0){close();}
         else{ cur=Math.min(cur,items.length-1); render(); }
       } else {
-        alert('❌ 删除失败：HTTP '+r.status);
+        r.text().then(function(body){
+          var msg='';
+          try{ msg=JSON.parse(body).message||''; }catch(e){}
+          alert('❌ 删除失败（HTTP '+r.status+'）'+(msg?'\n'+msg:''));
+        });
       }
     }).catch(function(err){ alert('❌ 请求失败：'+err); });
   }
