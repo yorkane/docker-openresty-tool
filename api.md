@@ -36,8 +36,10 @@ GET /api/ls/<path>?page=<N>&page_size=<N>
 |------|------|--------|------|
 | `page` | int ≥ 1 | `1` | 页码，从 1 开始 |
 | `page_size` | int ≥ 1 | `50` | 每页条目数，最大值由 `OR_API_PAGE_SIZE_MAX` 控制（默认 200） |
+| `sort` | string | `name` | 排序字段：`name` \| `size` \| `mtime` \| `ctime` \| `type` |
+| `order` | string | `asc` | 排序方向：`asc`（升序）\| `desc`（降序） |
 
-> **注意**：超过最大值时自动截断为 `OR_API_PAGE_SIZE_MAX`，不报错。
+> **注意**：超过最大值时自动截断为 `OR_API_PAGE_SIZE_MAX`，不报错。`sort` 传入非法值时静默回退为 `name`；`order` 传入非法值时静默回退为 `asc`。
 
 ### 成功响应 `200 OK`
 
@@ -47,6 +49,8 @@ GET /api/ls/<path>?page=<N>&page_size=<N>
   "page":      1,
   "page_size": 50,
   "total":     3,
+  "sort":      "name",
+  "order":     "asc",
   "items": [
     {
       "name":  "test_assets.cbz",
@@ -81,6 +85,8 @@ GET /api/ls/<path>?page=<N>&page_size=<N>
 | `page` | int | 当前页码 |
 | `page_size` | int | 本次请求的每页容量 |
 | `total` | int | 该目录下**所有**子项总数（分页前） |
+| `sort` | string | 本次排序所用的字段（回显请求参数，非法值已回退为 `name`） |
+| `order` | string | 本次排序方向（回显请求参数，非法值已回退为 `asc`） |
 | `items` | array | 当前页的条目列表 |
 
 #### 条目（item）字段说明
@@ -105,9 +111,17 @@ GET /api/ls/<path>?page=<N>&page_size=<N>
 
 #### 排序规则
 
-条目按如下规则排序：
-1. `"dir"` 和 `"zip"` 排在 `"file"` 之前
-2. 同类型内按文件名**字母序（大小写不敏感）**升序排列
+排序由 `sort` 和 `order` 参数控制，排序作用于**全量数据**，分页在排序之后进行。
+
+| `sort` 值 | 排序依据 | 相同时的次要排序 |
+|-----------|----------|-----------------|
+| `name`（默认）| 文件名（大小写不敏感） | — |
+| `size` | 文件大小（字节） | 名称升序 |
+| `mtime` | 最后修改时间 | 名称升序 |
+| `ctime` | 元数据变更时间 | 名称升序 |
+| `type` | 类型优先级：`dir` < `zip` < `file` | 名称升序 |
+
+`order=asc` 为升序（默认），`order=desc` 为降序。
 
 ### 错误响应
 
@@ -239,6 +253,42 @@ curl "http://localhost:5080/api/ls/archives?page=2&page_size=2"
     { "name": "readme.md", "type": "file", "size": 256,  "mtime": "...", "ctime": "..." }
   ]
 }
+```
+
+### 排序
+
+按文件大小降序（最大的文件排最前）：
+
+```bash
+curl "http://localhost:5080/api/ls/archives?sort=size&order=desc"
+```
+
+```json
+{
+  "path": "/archives",
+  "page": 1,
+  "page_size": 50,
+  "total": 3,
+  "sort": "size",
+  "order": "desc",
+  "items": [
+    { "name": "book.cbz",    "type": "zip",  "size": 10240, "mtime": "...", "ctime": "..." },
+    { "name": "archive.zip", "type": "zip",  "size": 5120,  "mtime": "...", "ctime": "..." },
+    { "name": "notes.txt",   "type": "file", "size": 128,   "mtime": "...", "ctime": "..." }
+  ]
+}
+```
+
+按修改时间降序（最新文件排最前），取第 1 页：
+
+```bash
+curl "http://localhost:5080/api/ls/archives?sort=mtime&order=desc&page=1&page_size=10"
+```
+
+按 `type` 升序（dirs → zip → files），同类内按名称升序（即默认展示风格）：
+
+```bash
+curl "http://localhost:5080/api/ls/archives?sort=type&order=asc"
 ```
 
 ### 超出范围的页返回空 items

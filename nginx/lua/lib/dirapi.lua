@@ -12,6 +12,8 @@
 -- Query params:
 --   page      (int ≥1, default 1)      — page number, 1-based
 --   page_size (int ≥1, default 50)     — items per page, capped at OR_API_PAGE_SIZE_MAX (default 200)
+--   sort      (string, default "name") — sort field: name | size | mtime | ctime | type
+--   order     (string, default "asc")  — sort direction: asc | desc
 --
 -- Response 200 application/json:
 --   {
@@ -184,8 +186,9 @@ end
 
 local function encode_ok(resp)
     return string.format(
-        '{"path":%s,"page":%d,"page_size":%d,"total":%d,"items":%s}',
+        '{"path":%s,"page":%d,"page_size":%d,"total":%d,"sort":%s,"order":%s,"items":%s}',
         json_str(resp.path), resp.page, resp.page_size, resp.total,
+        json_str(resp.sort or "name"), json_str(resp.order or "asc"),
         encode_items(resp.items)
     )
 end
@@ -287,14 +290,6 @@ local function list_zip_dir(zip_path, inner)
         end
     end
 
-    -- Sort: dirs first (alpha), then files (alpha)
-    table.sort(items, function(a, b)
-        local ta = (a.type == "dir") and 0 or 1
-        local tb = (b.type == "dir") and 0 or 1
-        if ta ~= tb then return ta < tb end
-        return a.name:lower() < b.name:lower()
-    end)
-
     return items, nil
 end
 
@@ -340,15 +335,58 @@ local function list_fs_dir(dir_path, zip_transparent)
     end
     C.closedir(dp)
 
-    -- Sort: dirs + zips first (alpha), then files (alpha)
-    table.sort(items, function(a, b)
-        local ta = (a.type == "dir" or a.type == "zip") and 0 or 1
-        local tb = (b.type == "dir" or b.type == "zip") and 0 or 1
-        if ta ~= tb then return ta < tb end
-        return a.name:lower() < b.name:lower()
-    end)
-
     return items, nil
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Sort a flat list of items.
+--
+-- sort  : field to sort by — "name" | "size" | "mtime" | "ctime" | "type"
+--         Any unrecognised value falls back to "name".
+-- order : "asc" (default) or "desc"
+--
+-- For the "type" field, the canonical priority order is:
+--   dir < zip < file   (so dirs appear first in "asc")
+-- String comparisons are case-insensitive.
+-- mtime / ctime are ISO-8601 strings — lexicographic order equals time order.
+-- ──────────────────────────────────────────────────────────
+local _type_rank = { dir = 0, zip = 1, file = 2 }
+
+local function sort_items(items, sort_by, order)
+    -- Validate / default parameters
+    local valid_fields = { name=true, size=true, mtime=true, ctime=true, type=true }
+    if not valid_fields[sort_by] then sort_by = "name" end
+    local descending = (order == "desc")
+
+    table.sort(items, function(a, b)
+        local less
+        if sort_by == "name" then
+            less = (a.name:lower() < b.name:lower())
+        elseif sort_by == "size" then
+            local sa = a.size or 0
+            local sb = b.size or 0
+            if sa ~= sb then less = (sa < sb)
+            else less = (a.name:lower() < b.name:lower()) end
+        elseif sort_by == "mtime" then
+            local ma = a.mtime or ""
+            local mb = b.mtime or ""
+            if ma ~= mb then less = (ma < mb)
+            else less = (a.name:lower() < b.name:lower()) end
+        elseif sort_by == "ctime" then
+            local ca = a.ctime or ""
+            local cb = b.ctime or ""
+            if ca ~= cb then less = (ca < cb)
+            else less = (a.name:lower() < b.name:lower()) end
+        elseif sort_by == "type" then
+            local ra = _type_rank[a.type] or 2
+            local rb = _type_rank[b.type] or 2
+            if ra ~= rb then less = (ra < rb)
+            else less = (a.name:lower() < b.name:lower()) end
+        else
+            less = (a.name:lower() < b.name:lower())
+        end
+        return descending and not less or (not descending and less)
+    end)
 end
 
 -- ──────────────────────────────────────────────────────────
@@ -387,6 +425,9 @@ function _M.handle(webdav_root)
     local page      = math.max(1, tonumber(args.page) or 1)
     local page_size = math.max(1, tonumber(args.page_size) or c.default_page_size)
     if page_size > c.page_size_max then page_size = c.page_size_max end
+    local sort_by   = args.sort  or "name"
+    local order     = args.order or "asc"
+    if order ~= "asc" and order ~= "desc" then order = "asc" end
 
     -- extract relative path (strip /api/ls prefix)
     local uri      = ngx.var.uri
@@ -440,12 +481,15 @@ function _M.handle(webdav_root)
         local display_zip = "/" .. zip_rel
         local display = (inner == "" and display_zip or (display_zip .. "/" .. inner))
 
+        sort_items(all_items, sort_by, order)
         local page_items, total = paginate(all_items, page, page_size)
         return send_json(200, encode_ok({
             path      = display,
             page      = page,
             page_size = page_size,
             total     = total,
+            sort      = sort_by,
+            order     = order,
             items     = page_items,
         }))
     end
@@ -473,7 +517,8 @@ function _M.handle(webdav_root)
         return send_json(500, encode_err("internal", err or "listing failed"))
     end
 
-    -- paginate
+    -- sort, then paginate
+    sort_items(all_items, sort_by, order)
     local page_items, total = paginate(all_items, page, page_size)
 
     -- normalise display path
@@ -484,6 +529,8 @@ function _M.handle(webdav_root)
         page      = page,
         page_size = page_size,
         total     = total,
+        sort      = sort_by,
+        order     = order,
         items     = page_items,
     }))
 end

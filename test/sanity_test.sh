@@ -17,6 +17,7 @@
 #   7. OR_ZIPFS_TRANSPARENT switch (enable / disable)
 #   8. Directory JSON API (/api/ls/) — basic, pagination, error, transparent-OFF
 #   9. Directory JSON API (/api/ls/) — ZIP internal directory browsing
+#  10. Directory JSON API (/api/ls/) — field sorting (sort / order params)
 #
 # Requirements:
 #   - curl
@@ -647,6 +648,101 @@ if [[ -n "$ZIP_TOTAL" && "$ZIP_TOTAL" -ge 1 ]]; then
     pass "ZIP listing pagination: total is at least 1 ($ZIP_TOTAL)"
 else
     fail "ZIP listing pagination: total missing or zero"
+fi
+
+# =============================================================================
+# Section 10 — Directory JSON API: sorting (sort / order params)
+# =============================================================================
+section "10. Directory JSON API — sorting"
+
+# ── 10a. Default order is sort=name asc (response echoes sort/order fields) ──
+SORT_DEFAULT=$(curl -s "${BASE_URL}/api/ls/archives" 2>/dev/null)
+if echo "$SORT_DEFAULT" | grep -q '"sort":"name"'; then
+    pass "Sorting: default response includes sort=name"
+else
+    fail "Sorting: default response missing sort=name (got: $SORT_DEFAULT)"
+fi
+if echo "$SORT_DEFAULT" | grep -q '"order":"asc"'; then
+    pass "Sorting: default response includes order=asc"
+else
+    fail "Sorting: default response missing order=asc"
+fi
+
+# ── 10b. sort=name&order=desc: last item should come before first item alpha-wise ──
+SORT_NAME_DESC=$(curl -s "${BASE_URL}/api/ls/archives?sort=name&order=desc" 2>/dev/null)
+if echo "$SORT_NAME_DESC" | grep -q '"sort":"name"'; then
+    pass "Sorting: sort=name echoed in response"
+else
+    fail "Sorting: sort=name not echoed (got: $SORT_NAME_DESC)"
+fi
+if echo "$SORT_NAME_DESC" | grep -q '"order":"desc"'; then
+    pass "Sorting: order=desc echoed in response"
+else
+    fail "Sorting: order=desc not echoed"
+fi
+# Verify order is actually reversed vs asc: capture first item name in each
+SORT_NAME_ASC=$(curl -s "${BASE_URL}/api/ls/archives?sort=name&order=asc" 2>/dev/null)
+FIRST_ASC=$(echo "$SORT_NAME_ASC"  | grep -o '"name":"[^"]*"' | head -1 | sed 's/"name":"//;s/"//')
+FIRST_DESC=$(echo "$SORT_NAME_DESC" | grep -o '"name":"[^"]*"' | head -1 | sed 's/"name":"//;s/"//')
+if [[ -n "$FIRST_ASC" && -n "$FIRST_DESC" && "$FIRST_ASC" != "$FIRST_DESC" ]]; then
+    pass "Sorting: asc and desc yield different first items (asc=$FIRST_ASC, desc=$FIRST_DESC)"
+else
+    fail "Sorting: asc/desc first items identical or empty (asc=$FIRST_ASC, desc=$FIRST_DESC)"
+fi
+
+# ── 10c. sort=size&order=desc ──
+SORT_SIZE=$(curl -s "${BASE_URL}/api/ls/archives?sort=size&order=desc" 2>/dev/null)
+if echo "$SORT_SIZE" | grep -q '"sort":"size"'; then
+    pass "Sorting: sort=size echoed in response"
+else
+    fail "Sorting: sort=size not echoed"
+fi
+
+# ── 10d. sort=mtime ──
+SORT_MTIME=$(curl -s "${BASE_URL}/api/ls/archives?sort=mtime&order=asc" 2>/dev/null)
+if echo "$SORT_MTIME" | grep -q '"sort":"mtime"'; then
+    pass "Sorting: sort=mtime echoed in response"
+else
+    fail "Sorting: sort=mtime not echoed"
+fi
+
+# ── 10e. sort=type&order=asc: dirs/zips appear before files ──
+SORT_TYPE=$(curl -s "${BASE_URL}/api/ls/archives?sort=type&order=asc" 2>/dev/null)
+if echo "$SORT_TYPE" | grep -q '"sort":"type"'; then
+    pass "Sorting: sort=type echoed in response"
+else
+    fail "Sorting: sort=type not echoed"
+fi
+# Check that no "file" type appears before the first "dir" or "zip" type
+FIRST_TYPE=$(echo "$SORT_TYPE" | grep -o '"type":"[^"]*"' | head -1 | sed 's/"type":"//;s/"//')
+if [[ "$FIRST_TYPE" == "dir" || "$FIRST_TYPE" == "zip" ]]; then
+    pass "Sorting: sort=type asc → first item is dir or zip (got: $FIRST_TYPE)"
+else
+    fail "Sorting: sort=type asc → first item unexpectedly file (got: $FIRST_TYPE)"
+fi
+
+# ── 10f. Invalid sort field falls back to name ──
+SORT_BAD=$(curl -s "${BASE_URL}/api/ls/archives?sort=badfield" 2>/dev/null)
+if echo "$SORT_BAD" | grep -q '"sort":"name"'; then
+    pass "Sorting: invalid sort field falls back to name"
+else
+    fail "Sorting: invalid sort field not falling back to name (got: $SORT_BAD)"
+fi
+
+# ── 10g. Invalid order value falls back to asc ──
+SORT_BAD_ORDER=$(curl -s "${BASE_URL}/api/ls/archives?order=sideways" 2>/dev/null)
+if echo "$SORT_BAD_ORDER" | grep -q '"order":"asc"'; then
+    pass "Sorting: invalid order value falls back to asc"
+else
+    fail "Sorting: invalid order value not falling back to asc (got: $SORT_BAD_ORDER)"
+fi
+
+# ── 10h. Sorting also works inside ZIP ──
+ZIP_SORT=$(curl -s "${BASE_URL}/api/ls/archives/test_assets.zip?sort=name&order=desc" 2>/dev/null)
+if echo "$ZIP_SORT" | grep -q '"sort":"name"' && echo "$ZIP_SORT" | grep -q '"order":"desc"'; then
+    pass "Sorting: sort/order echoed for ZIP internal listing"
+else
+    fail "Sorting: sort/order not echoed for ZIP internal listing (got: $ZIP_SORT)"
 fi
 
 # =============================================================================
