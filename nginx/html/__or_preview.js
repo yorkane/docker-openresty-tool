@@ -61,23 +61,37 @@
   /* ────────────────────────────────────────────
      Build overlay DOM (created once, reused)
   ──────────────────────────────────────────── */
-  var TOOLBAR_H = 44; // px
+  var TOOLBAR_H = 44; // px – used only for size calculations
+
+  /* Inject toolbar hover styles */
+  (function () {
+    var s = document.createElement('style');
+    s.textContent =
+      '#__or_tb{opacity:.18;transition:opacity .2s;}' +
+      '#__or_tb:hover{opacity:1;}' +
+      '#__or_tb button{background:none;border:none;cursor:pointer;font-size:16px;' +
+        'padding:3px 7px;color:#fff;line-height:1.3;border-radius:4px;' +
+        'white-space:nowrap;flex-shrink:0;}' +
+      '#__or_tb button.active{background:rgba(255,255,255,.25);}';
+    document.head.appendChild(s);
+  })();
 
   var ov = document.createElement('div');
   ov.id = '__or_ov';
   ov.style.cssText =
-    'display:none;position:fixed;inset:0;z-index:99999;background:#111;' +
-    'flex-direction:column;align-items:stretch;';
+    'display:none;position:fixed;inset:0;z-index:99999;background:#111;';
 
-  /* toolbar */
+  /* toolbar – absolutely positioned, overlays the media */
   var tb = document.createElement('div');
+  tb.id = '__or_tb';
   tb.style.cssText =
-    'flex:0 0 ' + TOOLBAR_H + 'px;display:flex;align-items:center;' +
-    'padding:0 10px;gap:5px;background:rgba(0,0,0,.65);color:#fff;' +
+    'position:absolute;top:0;left:0;right:0;height:' + TOOLBAR_H + 'px;' +
+    'display:flex;align-items:center;' +
+    'padding:0 10px;gap:5px;background:rgba(0,0,0,.55);color:#fff;' +
     'font-size:14px;z-index:2;box-sizing:border-box;overflow:hidden;';
 
   function bStyle(active) {
-    return 'background:' + (active ? 'rgba(255,255,255,.25)' : 'none') + ';' +
+    return (active ? 'background:rgba(255,255,255,.25);' : '') +
       'border:none;cursor:pointer;font-size:16px;padding:3px 7px;color:#fff;' +
       'line-height:1.3;border-radius:4px;white-space:nowrap;flex-shrink:0;';
   }
@@ -97,12 +111,12 @@
     '<button id="__or_del"   title="删除 Del"     style="' + bStyle(false) + '">🗑️</button>' +
     '<button id="__or_cls"   title="关闭 Esc"     style="' + bStyle(false) + '">✖️</button>';
 
-  /* media area */
+  /* media area – fills the entire overlay */
   var mediaEl = document.createElement('div');
   mediaEl.id = '__or_media';
   mediaEl.style.cssText =
-    'flex:1;display:flex;align-items:center;justify-content:center;' +
-    'overflow:hidden;position:relative;';
+    'position:absolute;inset:0;display:flex;align-items:center;' +
+    'justify-content:center;overflow:hidden;';
 
   ov.appendChild(tb);
   ov.appendChild(mediaEl);
@@ -146,7 +160,7 @@
   function openAt(idx) {
     cur = (idx + items.length) % items.length;
     render();
-    ov.style.display = 'flex';
+    ov.style.display = 'block';
     document.body.style.overflow = 'hidden';
     preloadAround(cur);
   }
@@ -186,7 +200,7 @@
     var nw = img.naturalWidth  || 1;
     var nh = img.naturalHeight || 1;
     var sw = mediaEl.clientWidth  || window.innerWidth;
-    var sh = mediaEl.clientHeight || (window.innerHeight - TOOLBAR_H);
+    var sh = mediaEl.clientHeight || window.innerHeight;
 
     /* reset */
     img.style.cssText = 'display:block;max-width:none;max-height:none;' +
@@ -248,9 +262,9 @@
   ──────────────────────────────────────────── */
   function applyVidMode(vid) {
     var vw = vid.videoWidth  || mediaEl.clientWidth  || window.innerWidth;
-    var vh = vid.videoHeight || mediaEl.clientHeight || (window.innerHeight - TOOLBAR_H);
+    var vh = vid.videoHeight || mediaEl.clientHeight || window.innerHeight;
     var sw = mediaEl.clientWidth  || window.innerWidth;
-    var sh = mediaEl.clientHeight || (window.innerHeight - TOOLBAR_H);
+    var sh = mediaEl.clientHeight || window.innerHeight;
 
     vid.style.cssText = 'display:block;max-width:none;max-height:none;' +
       'width:auto;height:auto;transform:none;transform-origin:center center;flex-shrink:0;';
