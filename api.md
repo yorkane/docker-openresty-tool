@@ -1,6 +1,16 @@
 # API 文档
 
-本文档描述 docker-openresty-tool 提供的 HTTP API 接口。
+本文档描述 docker-openresty-tool 提供的全部 HTTP JSON API 接口。
+
+> **快速跳转**
+>
+> | 接口 | 方法 | 路径 | 功能 |
+> |------|------|------|------|
+> | [目录列表](#目录-json-api--get-apilspath) | `GET` | `/api/ls/<path>` | 列出目录或 ZIP 内部文件，支持分页、排序 |
+> | [删除](#删除文件或目录--delete-apirmpath) | `DELETE` | `/api/rm/<path>` | 删除文件或目录（递归） |
+> | [移动/改名](#移动--改名--post-apimove) | `POST` | `/api/move` | 移动或重命名文件/目录 |
+> | [新建目录](#新建目录--post-apimkdirpath) | `POST` | `/api/mkdir/<path>` | 创建目录（mkdir -p） |
+> | [上传文件](#上传文件--post-apiuploadpath) | `POST` | `/api/upload/<path>` | 上传单个文件 |
 
 ---
 
