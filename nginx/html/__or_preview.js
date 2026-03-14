@@ -40,7 +40,8 @@
 
   /* ── Preload cache: href → HTMLImageElement ── */
   var preloadCache = {};
-  var PRELOAD_AHEAD = 2; // load this many images ahead and behind
+  var PRELOAD_BACK  = 3; // preload this many images behind current
+  var PRELOAD_FWRD  = 6; // preload this many images ahead of current
 
   function preload(href) {
     if (!isImg(href) || preloadCache[href]) return;
@@ -50,10 +51,12 @@
   }
 
   function preloadAround(idx) {
-    for (var d = 1; d <= PRELOAD_AHEAD; d++) {
+    for (var d = 1; d <= PRELOAD_BACK; d++) {
       var prev = items[(idx - d + items.length) % items.length];
-      var next = items[(idx + d) % items.length];
       if (prev && isImg(prev.href)) preload(prev.href);
+    }
+    for (var f = 1; f <= PRELOAD_FWRD; f++) {
+      var next = items[(idx + f) % items.length];
       if (next && isImg(next.href)) preload(next.href);
     }
   }
@@ -67,7 +70,7 @@
   (function () {
     var s = document.createElement('style');
     s.textContent =
-      '#__or_tb{opacity:.18;transition:opacity .2s;}' +
+      '#__or_tb{opacity:.10;transition:opacity .2s;}' +
       '#__or_tb:hover{opacity:1;}' +
       '#__or_tb button{background:none;border:none;cursor:pointer;font-size:16px;' +
         'padding:3px 7px;color:#fff;line-height:1.3;border-radius:4px;' +
@@ -392,7 +395,16 @@
   document.getElementById('__or_del').onclick   = doDelete;
   document.getElementById('__or_cls').onclick   = closeOv;
 
-  ov.addEventListener('click', function (e) { if (e.target === ov || e.target === mediaEl) closeOv(); });
+  /* Click on media area → next item; click outside (bare overlay bg) → close */
+  mediaEl.addEventListener('click', function (e) {
+    /* If clicking on a video element, let the browser handle it (controls) */
+    if (e.target && e.target.tagName === 'VIDEO') return;
+    /* If clicking on an audio element or its wrapper, ignore */
+    if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'DIV')) return;
+    openAt(cur + 1);
+  });
+
+  ov.addEventListener('click', function (e) { if (e.target === ov) closeOv(); });
 
   document.addEventListener('keydown', function (e) {
     if (ov.style.display === 'none') return;
