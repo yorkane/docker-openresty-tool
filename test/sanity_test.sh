@@ -18,6 +18,7 @@
 #   8. Directory JSON API (/api/ls/) — basic, pagination, error, transparent-OFF
 #   9. Directory JSON API (/api/ls/) — ZIP internal directory browsing
 #  10. Directory JSON API (/api/ls/) — field sorting (sort / order params)
+#  11. File Management API (/api/rm, /api/move, /api/mkdir, /api/upload)
 #
 # Requirements:
 #   - curl
@@ -752,6 +753,189 @@ if echo "$ZIP_SORT" | grep -q '"sort":"name"' && echo "$ZIP_SORT" | grep -q '"or
     pass "Sorting: sort/order echoed for ZIP internal listing"
 else
     fail "Sorting: sort/order not echoed for ZIP internal listing (got: $ZIP_SORT)"
+fi
+
+# =============================================================================
+# Section 11 — File Management API (rm / move / mkdir / upload)
+# =============================================================================
+section "11. File Management API"
+
+# We use a dedicated scratch directory so tests don't touch real data.
+SCRATCH_DIR="api_test_scratch_$$"
+
+# ── 11a. mkdir: create a new directory ──────────────────────────────────────
+RM_BODY=$(curl -s -X POST "${BASE_URL}/api/mkdir/${SCRATCH_DIR}" 2>/dev/null)
+if echo "$RM_BODY" | grep -q '"ok":true'; then
+    pass "mkdir: creates new directory /${SCRATCH_DIR}"
+else
+    fail "mkdir: expected {ok:true}, got: $RM_BODY"
+fi
+
+# Idempotent: mkdir on existing dir returns 200
+RM_BODY2=$(curl -s -X POST "${BASE_URL}/api/mkdir/${SCRATCH_DIR}" 2>/dev/null)
+if echo "$RM_BODY2" | grep -q '"ok":true'; then
+    pass "mkdir: idempotent on existing directory"
+else
+    fail "mkdir: idempotent call failed (got: $RM_BODY2)"
+fi
+
+# mkdir -p: create nested directories
+NESTED_BODY=$(curl -s -X POST "${BASE_URL}/api/mkdir/${SCRATCH_DIR}/a/b/c" 2>/dev/null)
+if echo "$NESTED_BODY" | grep -q '"ok":true'; then
+    pass "mkdir: creates nested directories (mkdir -p)"
+else
+    fail "mkdir: nested mkdir failed (got: $NESTED_BODY)"
+fi
+
+# ── 11b. upload: write a file ───────────────────────────────────────────────
+UPLOAD_BODY=$(curl -s -X POST "${BASE_URL}/api/upload/${SCRATCH_DIR}/hello.txt" \
+    -H "Content-Type: text/plain" \
+    --data-binary "Hello from fileapi test!" 2>/dev/null)
+if echo "$UPLOAD_BODY" | grep -q '"ok":true'; then
+    pass "upload: uploads a text file"
+else
+    fail "upload: expected {ok:true}, got: $UPLOAD_BODY"
+fi
+
+# Verify the file is readable via WebDAV GET
+FILE_CONTENT=$(curl -s "${BASE_URL}/${SCRATCH_DIR}/hello.txt" 2>/dev/null)
+if echo "$FILE_CONTENT" | grep -q "Hello from fileapi test!"; then
+    pass "upload: file content is readable via WebDAV"
+else
+    fail "upload: file content not as expected (got: $FILE_CONTENT)"
+fi
+
+# size field in response should be non-zero
+if echo "$UPLOAD_BODY" | grep -qE '"size":[1-9]'; then
+    pass "upload: response includes non-zero size"
+else
+    fail "upload: size field missing or zero (got: $UPLOAD_BODY)"
+fi
+
+# upload to nested path creates parent dirs automatically
+UPLOAD_DEEP=$(curl -s -X POST "${BASE_URL}/api/upload/${SCRATCH_DIR}/deep/nested/file.txt" \
+    -H "Content-Type: text/plain" \
+    --data-binary "deep file" 2>/dev/null)
+if echo "$UPLOAD_DEEP" | grep -q '"ok":true'; then
+    pass "upload: auto-creates parent directories"
+else
+    fail "upload: auto parent creation failed (got: $UPLOAD_DEEP)"
+fi
+
+# ── 11c. move: rename a file ────────────────────────────────────────────────
+MOVE_BODY=$(curl -s -X POST "${BASE_URL}/api/move" \
+    -H "Content-Type: application/json" \
+    -d "{\"from\":\"/${SCRATCH_DIR}/hello.txt\",\"to\":\"/${SCRATCH_DIR}/renamed.txt\"}" 2>/dev/null)
+if echo "$MOVE_BODY" | grep -q '"ok":true'; then
+    pass "move: renames a file"
+else
+    fail "move: rename failed (got: $MOVE_BODY)"
+fi
+
+# Old name should be gone (404)
+OLD_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/${SCRATCH_DIR}/hello.txt" 2>/dev/null)
+if [[ "$OLD_CODE" == "404" ]]; then
+    pass "move: source file no longer accessible after rename"
+else
+    fail "move: source still accessible after rename (HTTP $OLD_CODE)"
+fi
+
+# New name should exist
+NEW_CONTENT=$(curl -s "${BASE_URL}/${SCRATCH_DIR}/renamed.txt" 2>/dev/null)
+if echo "$NEW_CONTENT" | grep -q "Hello from fileapi test!"; then
+    pass "move: destination file has correct content after rename"
+else
+    fail "move: destination content wrong after rename (got: $NEW_CONTENT)"
+fi
+
+# ── 11d. move: conflict without overwrite ────────────────────────────────────
+# Upload a second file
+curl -s -X POST "${BASE_URL}/api/upload/${SCRATCH_DIR}/file_a.txt" \
+    --data-binary "file a" > /dev/null 2>&1
+curl -s -X POST "${BASE_URL}/api/upload/${SCRATCH_DIR}/file_b.txt" \
+    --data-binary "file b" > /dev/null 2>&1
+
+CONFLICT_BODY=$(curl -s -X POST "${BASE_URL}/api/move" \
+    -H "Content-Type: application/json" \
+    -d "{\"from\":\"/${SCRATCH_DIR}/file_a.txt\",\"to\":\"/${SCRATCH_DIR}/file_b.txt\"}" 2>/dev/null)
+CONFLICT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE_URL}/api/move" \
+    -H "Content-Type: application/json" \
+    -d "{\"from\":\"/${SCRATCH_DIR}/file_a.txt\",\"to\":\"/${SCRATCH_DIR}/file_b.txt\"}" 2>/dev/null)
+if [[ "$CONFLICT_CODE" == "409" ]]; then
+    pass "move: returns 409 when destination exists and no overwrite"
+else
+    fail "move: expected 409 conflict, got HTTP $CONFLICT_CODE"
+fi
+
+# move with overwrite: true should succeed
+OVERWRITE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE_URL}/api/move" \
+    -H "Content-Type: application/json" \
+    -d "{\"from\":\"/${SCRATCH_DIR}/file_a.txt\",\"to\":\"/${SCRATCH_DIR}/file_b.txt\",\"overwrite\":true}" 2>/dev/null)
+if [[ "$OVERWRITE_CODE" == "200" ]]; then
+    pass "move: overwrite:true succeeds (200)"
+else
+    fail "move: overwrite:true expected 200, got HTTP $OVERWRITE_CODE"
+fi
+
+# ── 11e. rm: delete a file ───────────────────────────────────────────────────
+RM_FILE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    "${BASE_URL}/api/rm/${SCRATCH_DIR}/renamed.txt" 2>/dev/null)
+if [[ "$RM_FILE_CODE" == "200" ]]; then
+    pass "rm: deletes a file (HTTP 200)"
+else
+    fail "rm: expected 200, got HTTP $RM_FILE_CODE"
+fi
+
+# File should be gone
+GONE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/${SCRATCH_DIR}/renamed.txt" 2>/dev/null)
+if [[ "$GONE_CODE" == "404" ]]; then
+    pass "rm: file is no longer accessible after delete"
+else
+    fail "rm: file still accessible after delete (HTTP $GONE_CODE)"
+fi
+
+# ── 11f. rm: delete a directory recursively ──────────────────────────────────
+RM_DIR_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    "${BASE_URL}/api/rm/${SCRATCH_DIR}" 2>/dev/null)
+if [[ "$RM_DIR_CODE" == "200" ]]; then
+    pass "rm: deletes directory recursively (HTTP 200)"
+else
+    fail "rm: directory delete expected 200, got HTTP $RM_DIR_CODE"
+fi
+
+# Directory should be gone
+DIR_GONE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/${SCRATCH_DIR}/" 2>/dev/null)
+if [[ "$DIR_GONE_CODE" == "404" ]]; then
+    pass "rm: directory is no longer accessible after recursive delete"
+else
+    fail "rm: directory still accessible after recursive delete (HTTP $DIR_GONE_CODE)"
+fi
+
+# ── 11g. rm: 404 on nonexistent path ─────────────────────────────────────────
+RM_MISSING=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    "${BASE_URL}/api/rm/no_such_path_xyz_$$" 2>/dev/null)
+if [[ "$RM_MISSING" == "404" ]]; then
+    pass "rm: returns 404 for nonexistent path"
+else
+    fail "rm: expected 404 for missing path, got HTTP $RM_MISSING"
+fi
+
+# ── 11h. path traversal is rejected ──────────────────────────────────────────
+TRAV_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    "${BASE_URL}/api/rm/..%2F..%2Fetc%2Fpasswd" 2>/dev/null)
+if [[ "$TRAV_CODE" == "400" ]]; then
+    pass "rm: path traversal rejected (HTTP 400)"
+else
+    fail "rm: path traversal not rejected (HTTP $TRAV_CODE)"
+fi
+
+# ── 11i. wrong HTTP method returns 405 ───────────────────────────────────────
+METHOD_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET \
+    "${BASE_URL}/api/rm/anything" 2>/dev/null)
+if [[ "$METHOD_CODE" == "405" ]]; then
+    pass "rm: GET returns 405 method not allowed"
+else
+    fail "rm: GET expected 405, got HTTP $METHOD_CODE"
 fi
 
 # =============================================================================
