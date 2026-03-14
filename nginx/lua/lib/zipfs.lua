@@ -143,11 +143,18 @@ local function list_dir(entries, prefix)
 end
 
 -- ──────────────────────────────────────────────────────────
--- Parse URI: /zip/<zip_rel>/<inner>
+-- Parse URI: /<prefix>/<zip_rel>/<inner>   (prefix may be "" or "/zip")
 -- Supports any configured zip-like extension (zip, cbz, …)
 -- ──────────────────────────────────────────────────────────
-local function parse_zip_uri(uri)
-    local rest = uri:match("^/zip/(.*)$")
+-- Strip a leading prefix (may be "" meaning no prefix) and parse zip boundary.
+-- Returns zip_rel, inner  or nil, nil
+local function parse_zip_uri_with_prefix(uri, prefix)
+    local rest
+    if prefix == "" then
+        rest = uri:gsub("^/+", "")
+    else
+        rest = uri:match("^" .. prefix .. "/(.*)$")
+    end
     if not rest then return nil, nil end
     local zip_end = find_zip_ext(rest)
     if not zip_end then return nil, nil end
@@ -157,9 +164,19 @@ local function parse_zip_uri(uri)
 end
 
 -- ──────────────────────────────────────────────────────────
--- HTML directory listing
+-- Parse URI: /zip/<zip_rel>/<inner>
+-- Supports any configured zip-like extension (zip, cbz, …)
 -- ──────────────────────────────────────────────────────────
-local function render_listing(zip_rel, inner, entries)
+local function parse_zip_uri(uri)
+    return parse_zip_uri_with_prefix(uri, "/zip")
+end
+
+-- ──────────────────────────────────────────────────────────
+-- HTML directory listing
+-- url_prefix: "/zip" for the /zip/ handler, "" for transparent mode
+-- ──────────────────────────────────────────────────────────
+local function render_listing(zip_rel, inner, entries, url_prefix)
+    url_prefix = url_prefix or "/zip"
     local prefix = (inner == "" and "" or (inner:gsub("/*$", "") .. "/"))
     local dirs, files = list_dir(entries, prefix)
     local title = "/" .. zip_rel .. "/" .. inner
@@ -185,16 +202,16 @@ local function render_listing(zip_rel, inner, entries)
     if inner ~= "" then
         local stripped = inner:gsub("/*$", "")
         local parent = stripped:match("^(.*)/[^/]+$") or ""
-        local parent_url = "/zip/" .. zip_rel .. (parent ~= "" and ("/" .. parent .. "/") or "/")
+        local parent_url = url_prefix .. "/" .. zip_rel .. (parent ~= "" and ("/" .. parent .. "/") or "/")
         h[#h+1] = '<tr><td><a href="' .. html_escape(parent_url) .. '">&#8593; ..</a></td><td class="sz">—</td></tr>'
     end
 
     for _, d in ipairs(dirs) do
-        local href = "/zip/" .. zip_rel .. "/" .. prefix .. d .. "/"
+        local href = url_prefix .. "/" .. zip_rel .. "/" .. prefix .. d .. "/"
         h[#h+1] = '<tr><td class="dir"><a href="' .. html_escape(href) .. '">&#128193;&nbsp;' .. html_escape(d) .. '/</a></td><td class="sz">—</td></tr>'
     end
     for _, f in ipairs(files) do
-        local href = "/zip/" .. zip_rel .. "/" .. prefix .. f.name
+        local href = url_prefix .. "/" .. zip_rel .. "/" .. prefix .. f.name
         h[#h+1] = '<tr><td><a href="' .. html_escape(href) .. '">' .. html_escape(f.name) .. '</a></td>'
         h[#h+1] = '<td class="sz">' .. human_size(f.size) .. '</td></tr>'
     end
@@ -204,14 +221,10 @@ local function render_listing(zip_rel, inner, entries)
 end
 
 -- ──────────────────────────────────────────────────────────
--- Main HTTP handler  (location /zip/)
+-- Shared serve logic: given zip_rel + inner, serve listing or file content.
+-- url_prefix is used to generate directory-listing links.
 -- ──────────────────────────────────────────────────────────
-function _M.handle(webdav_root)
-    local uri = ngx.var.uri
-
-    local zip_rel, inner = parse_zip_uri(uri)
-    if not zip_rel then return ngx.exit(ngx.HTTP_NOT_FOUND) end
-
+local function serve_zip(webdav_root, zip_rel, inner, url_prefix)
     local zip_path = webdav_root .. "/" .. zip_rel
     if not file_exists(zip_path) then
         ngx.log(ngx.WARN, "[zipfs] zip not found: ", zip_path)
@@ -229,7 +242,7 @@ function _M.handle(webdav_root)
     -- Directory listing
     local is_dir = (inner == "" or inner:sub(-1) == "/")
     if is_dir then
-        local body = render_listing(zip_rel, inner:gsub("/*$",""), entries)
+        local body = render_listing(zip_rel, inner:gsub("/*$",""), entries, url_prefix)
         zf:close()
         ngx.header["Content-Type"] = "text/html; charset=utf-8"
         ngx.header["X-ZipFS"] = "dir-listing"
@@ -255,6 +268,41 @@ function _M.handle(webdav_root)
     ngx.header["X-ZipFS"]        = "file"
     ngx.header["Cache-Control"]  = "public, max-age=3600"
     return ngx.print(data)
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Main HTTP handler  (location /zip/)
+-- ──────────────────────────────────────────────────────────
+function _M.handle(webdav_root)
+    local uri = ngx.var.uri
+
+    local zip_rel, inner = parse_zip_uri(uri)
+    if not zip_rel then return ngx.exit(ngx.HTTP_NOT_FOUND) end
+
+    return serve_zip(webdav_root, zip_rel, inner, "/zip")
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Transparent GET/HEAD handler — called from rewrite_by_lua_block
+-- when OR_ZIPFS_TRANSPARENT is enabled.
+-- Serves ZIP content directly at the original URL (no redirect).
+-- Directory listing links will also use the same root URL prefix.
+-- Returns true if the request was handled, false otherwise.
+-- ──────────────────────────────────────────────────────────
+function _M.handle_transparent(webdav_root)
+    local uri = ngx.var.uri
+
+    -- Parse the URI without any /zip/ prefix
+    local zip_rel, inner = parse_zip_uri_with_prefix(uri, "")
+    if not zip_rel then return false end
+
+    -- Derive url_prefix: the part of the URI before the zip filename
+    -- e.g. uri = "/archives/book.cbz/ch1"  → zip_rel = "archives/book.cbz"
+    --            url_prefix = ""  (root-relative links start with "/")
+    -- We want directory links to be like "/archives/book.cbz/subdir/"
+    -- so url_prefix is just "" and we prepend "/" when building hrefs.
+    serve_zip(webdav_root, zip_rel, inner, "")
+    return true
 end
 
 -- ──────────────────────────────────────────────────────────

@@ -399,12 +399,21 @@ assert_body_contains "WebDAV PROPFIND ZIP Depth:0 shows self only" \
     "207" "${BASE_URL}/archives/test_assets.zip" "test_assets.zip" \
     -X PROPFIND -H "Depth: 0"
 
-# GET .zip via WebDAV should redirect to /zip/ virtual FS
+# GET .zip via transparent mode should serve directly (200), NOT redirect to /zip/
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/archives/test_assets.zip/index.html")
-if [[ "$HTTP_CODE" == "302" || "$HTTP_CODE" == "200" ]]; then
-    pass "WebDAV GET .zip entry redirects or serves (HTTP $HTTP_CODE)"
+if [[ "$HTTP_CODE" == "200" ]]; then
+    pass "WebDAV GET .zip entry served directly without redirect (HTTP 200)"
 else
-    fail "WebDAV GET .zip entry unexpected status HTTP $HTTP_CODE"
+    fail "WebDAV GET .zip entry expected 200 (transparent serve), got HTTP $HTTP_CODE"
+fi
+
+# Verify URL was NOT rewritten to /zip/ prefix (check X-ZipFS header to confirm zipfs handled it)
+ZIPFS_HDR=$(curl -s -o /dev/null -D - "${BASE_URL}/archives/test_assets.zip/index.html" \
+    2>/dev/null | grep -i "x-zipfs" | head -1)
+if echo "$ZIPFS_HDR" | grep -qi "file"; then
+    pass "WebDAV GET .zip entry: X-ZipFS header confirms zipfs served (no /zip/ redirect)"
+else
+    fail "WebDAV GET .zip entry: X-ZipFS header missing or wrong (got: $ZIPFS_HDR)"
 fi
 
 # =============================================================================
@@ -463,10 +472,10 @@ fi
 
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
     "${BASE_URL}/archives/test_assets.zip/index.html")
-if [[ "$HTTP_CODE" == "302" || "$HTTP_CODE" == "200" ]]; then
-    pass "Transparent ON (re-enabled): GET .zip entry redirects or serves (HTTP $HTTP_CODE)"
+if [[ "$HTTP_CODE" == "200" ]]; then
+    pass "Transparent ON (re-enabled): GET .zip entry served directly (HTTP 200)"
 else
-    fail "Transparent ON (re-enabled): GET .zip unexpected status HTTP $HTTP_CODE"
+    fail "Transparent ON (re-enabled): GET .zip expected 200, got HTTP $HTTP_CODE"
 fi
 
 # =============================================================================
