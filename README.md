@@ -143,6 +143,7 @@ docker-openresty-tool/
             ├── basic_auth.lua   # HTTP 基础认证
             ├── dirapi.lua       # 目录 JSON API（/api/ls/）★新增
             ├── fileapi.lua      # 文件管理 API（/api/rm、move、mkdir、upload）★新增
+            ├── preview_inject.lua # HTML 目录页媒体预览注入★新增
             ├── tap.lua          # 流量 Tap / 调试工具
             ├── vips.lua         # 动态图片处理（libvips + lua-vips）★新增
             ├── webdav.lua       # WebDAV 处理器
@@ -163,6 +164,7 @@ docker-openresty-tool/
 | **Vips 图片处理（新）** | 动态裁切、缩放、格式转换（libvips） | 访问 `/img/<path>?w=300&fmt=webp` |
 | **目录 JSON API（新）** | 列出目录/ZIP 内容，支持分页排序，返回 JSON | `GET /api/ls/<path>`，详见 [api.md](api.md) |
 | **文件管理 API（新）** | 删除、移动/改名、新建目录、上传文件 | `DELETE/POST /api/rm、/api/move、/api/mkdir、/api/upload`，详见 [api.md](api.md) |
+| **媒体预览注入（新）** | 为所有 HTML 目录页自动注入👁预览按钮，支持图片/视频/音频全屏预览、键盘快捷键、删除 | 自动生效，无需配置；`lib/preview_inject.lua` |
 | **FancyIndex** | 美观的目录浏览页面 | 在 location 中启用 `fancyindex on` |
 | **Wake-on-LAN** | 通过 HTTP 接口远程唤醒局域网设备 | 调用 `lib/wol.lua` |
 | **Mock 接口** | 快速返回 JSON/文本模拟响应 | 访问 `/mock/` 路径 |
