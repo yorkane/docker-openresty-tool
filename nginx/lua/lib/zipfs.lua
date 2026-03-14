@@ -3,15 +3,55 @@
 --
 -- HTTP access:
 --   GET /zip/<path/to/archive.zip>/          → directory listing
---   GET /zip/<path/to/archive.zip>/<entry>   → serve file from ZIP
+--   GET /zip/<path/to/archive.cbz>/<entry>   → serve file from ZIP-like archive
 --
 -- WebDAV integration (transparent, called from main.conf rewrite_by_lua_block):
---   PROPFIND on any *.zip path → returns DAV XML for entries inside ZIP
---   GET/HEAD on *.zip path     → redirects to /zip/ virtual FS
+--   PROPFIND on any *.zip / *.cbz path → returns DAV XML for entries inside archive
+--   GET/HEAD on *.zip / *.cbz path     → redirects to /zip/ virtual FS
 --
+-- Supported extensions: configured via OR_ZIP_EXTS env var (default: zip,cbz)
 -- Requires: luazip (already installed in orabase:1)
 
 local _M = {}
+
+-- ──────────────────────────────────────────────────────────
+-- Supported ZIP-like extensions (configurable via OR_ZIP_EXTS)
+-- Default: zip,cbz
+-- Set OR_ZIP_EXTS=zip,cbz,cbr,epub to override
+-- ──────────────────────────────────────────────────────────
+local _zip_exts  -- lazily initialised set, keys are lowercase extensions
+
+local function get_zip_exts()
+    if _zip_exts then return _zip_exts end
+    local raw = "zip,cbz"  -- built-in default
+    local ok, env = pcall(require, "env")
+    if ok and env and env.OR_ZIP_EXTS and env.OR_ZIP_EXTS ~= "" then
+        raw = env.OR_ZIP_EXTS
+    end
+    _zip_exts = {}
+    for ext in raw:gmatch("[^,;%s]+") do
+        _zip_exts[ext:lower()] = true
+    end
+    return _zip_exts
+end
+
+-- Find the position (end index) of the first zip-like ext occurrence in s
+-- Returns: end_pos (inclusive)  e.g. for "foo/bar.cbz/img" → 11
+local function find_zip_ext(s)
+    local exts = get_zip_exts()
+    local best_pos, best_ext = nil, nil
+    for ext in pairs(exts) do
+        local pat = "%." .. ext  -- Lua pattern, not plain (ext has no specials)
+        local i, j = s:lower():find(pat)
+        if i then
+            if not best_pos or i < best_pos then
+                best_pos = j  -- end of the extension
+                best_ext  = s:sub(i, j)  -- preserve original case from URI
+            end
+        end
+    end
+    return best_pos, best_ext
+end
 
 -- ──────────────────────────────────────────────────────────
 -- MIME types
@@ -103,13 +143,13 @@ end
 
 -- ──────────────────────────────────────────────────────────
 -- Parse URI: /zip/<zip_rel>/<inner>
+-- Supports any configured zip-like extension (zip, cbz, …)
 -- ──────────────────────────────────────────────────────────
 local function parse_zip_uri(uri)
     local rest = uri:match("^/zip/(.*)$")
     if not rest then return nil, nil end
-    local zip_end = rest:find(".zip", 1, true)
+    local zip_end = find_zip_ext(rest)
     if not zip_end then return nil, nil end
-    zip_end = zip_end + 3
     local zip_rel = rest:sub(1, zip_end)
     local inner   = rest:sub(zip_end + 1):gsub("^/+", "")
     return zip_rel, inner
@@ -224,9 +264,8 @@ function _M.webdav_propfind(webdav_root, uri, depth)
     depth = depth or "1"
     local rel = uri:gsub("^/+", "")
 
-    local zip_end = rel:find(".zip", 1, true)
+    local zip_end = find_zip_ext(rel)
     if not zip_end then return nil end
-    zip_end = zip_end + 3
 
     local zip_rel = rel:sub(1, zip_end)
     local inner   = rel:sub(zip_end + 1):gsub("^/+", "")
@@ -277,10 +316,11 @@ function _M.webdav_propfind(webdav_root, uri, depth)
 end
 
 -- ──────────────────────────────────────────────────────────
--- Check if a URI points into a ZIP file
+-- Check if a URI points into a ZIP-like file
+-- Matches any extension in OR_ZIP_EXTS (default: zip, cbz)
 -- ──────────────────────────────────────────────────────────
 function _M.is_zip_request(uri)
-    return (uri or ""):find(".zip", 1, true) ~= nil
+    return find_zip_ext(uri or "") ~= nil
 end
 
 return _M

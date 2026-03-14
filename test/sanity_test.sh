@@ -176,6 +176,19 @@ HTML
         rm -rf "$tmpdir"
         echo -e "  ZIP created: $arcdir/test_assets.zip"
     fi
+
+    # Build test_assets.cbz (copy of .zip — CBZ is a ZIP with .cbz extension)
+    if [[ ! -f "$arcdir/test_assets.cbz" ]]; then
+        echo -e "\n${YELLOW}  → Building test CBZ archive (copy of .zip)...${NC}"
+        cp "$arcdir/test_assets.zip" "$arcdir/test_assets.cbz"
+        echo -e "  CBZ created: $arcdir/test_assets.cbz"
+    fi
+
+    # Build test_UPPER.ZIP (uppercase extension test)
+    if [[ ! -f "$arcdir/test_UPPER.ZIP" ]]; then
+        cp "$arcdir/test_assets.zip" "$arcdir/test_UPPER.ZIP"
+        echo -e "  Upper-case ZIP created: $arcdir/test_UPPER.ZIP"
+    fi
 }
 
 # =============================================================================
@@ -325,8 +338,45 @@ assert_status "Vips fit=fill (w=200,h=200)" \
 assert_status "Vips missing source returns 404" \
     "404" "${BASE_URL}/img/images/nonexistent.png?w=100"
 
-# ── 5. WebDAV ZIP Transparent Access ─────────────────────────────────────────
-section "5. WebDAV ZIP Transparent Access"
+# ── 5. ZipFS Multi-Extension (.cbz / .ZIP) ───────────────────────────────────
+section "5. ZipFS — Multi-Extension Support (cbz / uppercase)"
+
+# .cbz — directory listing
+assert_status "CBZ root directory listing" \
+    "200" "${BASE_URL}/zip/archives/test_assets.cbz/"
+assert_header "CBZ listing Content-Type is HTML" \
+    "${BASE_URL}/zip/archives/test_assets.cbz/" "Content-Type" "text/html"
+assert_header "CBZ listing X-ZipFS=dir-listing" \
+    "${BASE_URL}/zip/archives/test_assets.cbz/" "X-ZipFS" "dir-listing"
+
+# .cbz — file read
+assert_status "CBZ serve inner HTML file" \
+    "200" "${BASE_URL}/zip/archives/test_assets.cbz/index.html"
+assert_header "CBZ file X-ZipFS=file" \
+    "${BASE_URL}/zip/archives/test_assets.cbz/index.html" "X-ZipFS" "file"
+assert_header "CBZ HTML Content-Type" \
+    "${BASE_URL}/zip/archives/test_assets.cbz/index.html" "Content-Type" "text/html"
+
+# .cbz — 404 for missing entry
+assert_status "CBZ missing entry returns 404" \
+    "404" "${BASE_URL}/zip/archives/test_assets.cbz/nonexistent.txt"
+
+# Uppercase extension .ZIP
+assert_status "Uppercase .ZIP directory listing" \
+    "200" "${BASE_URL}/zip/archives/test_UPPER.ZIP/"
+assert_header "Uppercase .ZIP X-ZipFS=dir-listing" \
+    "${BASE_URL}/zip/archives/test_UPPER.ZIP/" "X-ZipFS" "dir-listing"
+
+# .cbz WebDAV PROPFIND
+assert_status "WebDAV PROPFIND on .cbz path returns 207" \
+    "207" "${BASE_URL}/archives/test_assets.cbz" \
+    -X PROPFIND -H "Depth: 1"
+assert_body_contains "WebDAV PROPFIND .cbz contains multistatus XML" \
+    "207" "${BASE_URL}/archives/test_assets.cbz" "multistatus" \
+    -X PROPFIND -H "Depth: 1"
+
+# ── 6. WebDAV ZIP Transparent Access ─────────────────────────────────────────
+section "6. WebDAV ZIP Transparent Access"
 
 assert_status "WebDAV PROPFIND on .zip path returns 207" \
     "207" "${BASE_URL}/archives/test_assets.zip" \
