@@ -804,7 +804,7 @@ bash test/sanity_test.sh
 bash test/sanity_test.sh http://your-host:5080
 ```
 
-**测试覆盖范围（64 个用例）：**
+**测试覆盖范围（79 个用例）：**
 
 | 测试组 | 用例数 | 覆盖内容 |
 |--------|--------|---------|
@@ -815,6 +815,7 @@ bash test/sanity_test.sh http://your-host:5080
 | 5. ZipFS 多后缀 | 11 | `.cbz`/`.ZIP` 目录列表、文件读取、WebDAV PROPFIND |
 | 6. WebDAV ZIP 透明接管 | 5 | PROPFIND 拦截、Depth 控制、GET 重定向 |
 | 7. OR_ZIPFS_TRANSPARENT 开关 | 4 | 关闭后透明接管停止、恢复后重新生效 |
+| 8. Directory JSON API | 15 | 结构/字段/排序/分页/404/错误/透明开关联动 |
 
 **输出示例：**
 
@@ -834,7 +835,7 @@ bash test/sanity_test.sh http://your-host:5080
   ...
 
 ═══════════════════════════════════════
-  Results: 64 passed  0 failed  0 skipped  / 64 total
+  Results: 79 passed  0 failed  0 skipped  / 79 total
 ═══════════════════════════════════════
 ```
 

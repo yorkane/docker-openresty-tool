@@ -465,6 +465,106 @@ else
 fi
 
 # =============================================================================
+# 8. Directory JSON API  /api/ls/
+# =============================================================================
+section "8. Directory JSON API (/api/ls/)"
+
+# ── 8a. Basic listing ──
+assert_status "API root listing returns 200" \
+    "200" "${BASE_URL}/api/ls/"
+assert_header "API root Content-Type is JSON" \
+    "${BASE_URL}/api/ls/" "Content-Type" "application/json"
+
+# check JSON structure
+API_BODY=$(curl -s "${BASE_URL}/api/ls/" 2>/dev/null)
+if echo "$API_BODY" | grep -q '"items"'; then
+    pass "API root response contains 'items' field"
+else
+    fail "API root response missing 'items' field"
+fi
+if echo "$API_BODY" | grep -q '"total"'; then
+    pass "API root response contains 'total' field"
+else
+    fail "API root response missing 'total' field"
+fi
+
+# archives listing — zip files should appear as type "zip"
+ARCH_BODY=$(curl -s "${BASE_URL}/api/ls/archives" 2>/dev/null)
+if echo "$ARCH_BODY" | grep -q '"type":"zip"'; then
+    pass "API /archives: zip files have type=zip"
+else
+    fail "API /archives: zip files missing type=zip"
+fi
+
+# images listing — png files should appear as type "file"
+IMG_BODY=$(curl -s "${BASE_URL}/api/ls/images" 2>/dev/null)
+if echo "$IMG_BODY" | grep -q '"type":"file"'; then
+    pass "API /images: png files have type=file"
+else
+    fail "API /images: png files missing type=file"
+fi
+
+# verify size and mtime are present
+if echo "$IMG_BODY" | grep -qE '"size":[1-9]'; then
+    pass "API /images: size field is non-zero"
+else
+    fail "API /images: size field missing or zero"
+fi
+if echo "$IMG_BODY" | grep -qE '"mtime":"20[0-9]{2}-'; then
+    pass "API /images: mtime field is valid ISO-8601 timestamp"
+else
+    fail "API /images: mtime field missing or malformed"
+fi
+
+# ── 8b. Pagination ──
+PAGE1=$(curl -s "${BASE_URL}/api/ls/archives?page_size=2" 2>/dev/null)
+PAGE2=$(curl -s "${BASE_URL}/api/ls/archives?page=2&page_size=2" 2>/dev/null)
+
+if echo "$PAGE1" | grep -q '"page_size":2'; then
+    pass "API pagination: page_size=2 reflected in response"
+else
+    fail "API pagination: page_size not reflected"
+fi
+if echo "$PAGE1" | grep -q '"page":1'; then
+    pass "API pagination: page 1 is returned"
+else
+    fail "API pagination: page field missing"
+fi
+if echo "$PAGE2" | grep -q '"page":2'; then
+    pass "API pagination: page 2 returns correct page number"
+else
+    fail "API pagination: page 2 not returned"
+fi
+# total should be same across pages
+TOTAL1=$(echo "$PAGE1" | grep -o '"total":[0-9]*' | grep -o '[0-9]*')
+TOTAL2=$(echo "$PAGE2" | grep -o '"total":[0-9]*' | grep -o '[0-9]*')
+if [[ "$TOTAL1" == "$TOTAL2" && -n "$TOTAL1" ]]; then
+    pass "API pagination: total is consistent across pages ($TOTAL1)"
+else
+    fail "API pagination: total mismatch or missing (p1=$TOTAL1, p2=$TOTAL2)"
+fi
+
+# ── 8c. Error cases ──
+assert_status "API non-existent path returns 404" \
+    "404" "${BASE_URL}/api/ls/nonexistent_path_xyz"
+ERR_BODY=$(curl -s "${BASE_URL}/api/ls/nonexistent_path_xyz" 2>/dev/null)
+if echo "$ERR_BODY" | grep -q '"error"'; then
+    pass "API 404 response contains error field"
+else
+    fail "API 404 response missing error field"
+fi
+
+# ── 8d. Transparent-OFF: zip type should become file ──
+_set_transparent false
+ZIP_OFF=$(curl -s "${BASE_URL}/api/ls/archives" 2>/dev/null)
+if echo "$ZIP_OFF" | grep -q '"type":"zip"'; then
+    fail "API transparent OFF: zip files should not have type=zip"
+else
+    pass "API transparent OFF: zip files return as type=file"
+fi
+_set_transparent true
+
+# =============================================================================
 # SUMMARY
 # =============================================================================
 TOTAL=$((PASS + FAIL + SKIP))
