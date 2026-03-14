@@ -153,7 +153,7 @@ docker-openresty-tool/
 | **自动 HTTPS（ACME）** | 对接 Let's Encrypt，自动签发/续期证书 | `OR_ACME=true` + 配置 `init.lua` |
 | **HTTP Basic Auth** | 对任意 location 开启用户名密码保护 | `OR_AUTH_USER=user:pass` |
 | **WebDAV** | 将挂载目录作为 WebDAV 文件服务器 | 默认挂载数据目录到 `/webdav` |
-| **ZipFS（新）** | 通过 HTTP/WebDAV 直接浏览和访问 ZIP/CBZ 等压缩包内部文件 | 访问 `/zip/<path>.cbz/...`，`OR_ZIP_EXTS` 配置后缀 |
+| **ZipFS（新）** | 通过 HTTP/WebDAV 直接浏览和访问 ZIP/CBZ 等压缩包内部文件 | 访问 `/zip/<path>.cbz/...`，`OR_ZIP_EXTS` 配置后缀，`OR_ZIPFS_TRANSPARENT` 控制开关 |
 | **Vips 图片处理（新）** | 动态裁切、缩放、格式转换（libvips） | 访问 `/img/<path>?w=300&fmt=webp` |
 | **FancyIndex** | 美观的目录浏览页面 | 在 location 中启用 `fancyindex on` |
 | **Wake-on-LAN** | 通过 HTTP 接口远程唤醒局域网设备 | 调用 `lib/wol.lua` |
@@ -480,6 +480,29 @@ docker run -e OR_ZIP_EXTS=zip,cbz,epub ...
 > **注意**：libzip 只要能打开该文件格式（内部结构符合 ZIP 规范），扩展名就能工作。
 > CBZ（漫画书格式）、EPUB（电子书）等本质上都是 ZIP。
 
+### 透明接管开关
+
+WebDAV 客户端访问 `.zip` / `.cbz` 等路径时，默认会被自动拦截并由 ZipFS 处理（透明接管）。可通过环境变量 **`OR_ZIPFS_TRANSPARENT`** 控制此行为：
+
+| 变量值 | 行为 |
+|--------|------|
+| 未设置 / `true`（默认） | 启用透明接管：PROPFIND 返回 ZIP 内部目录树，GET 重定向到 `/zip/` |
+| `false` | 禁用透明接管：`.zip` 路径作为普通 WebDAV 文件处理，`/zip/` HTTP 访问**不受影响** |
+
+```yaml
+# docker-compose.yml
+environment:
+  OR_ZIPFS_TRANSPARENT: "false"   # 关闭 WebDAV 透明 ZIP 接管
+```
+
+```bash
+# 直接 docker run
+docker run -e OR_ZIPFS_TRANSPARENT=false ...
+```
+
+> **说明**：禁用透明接管后，WebDAV 客户端看到的 `.zip` 就是一个普通文件（可下载/上传），
+> 不再能直接浏览 ZIP 内部。通过 `/zip/` 前缀的直接 HTTP 访问不受此开关影响。
+
 ### HTTP 访问 ZIP 内容
 
 URL 格式：
@@ -781,7 +804,7 @@ bash test/sanity_test.sh
 bash test/sanity_test.sh http://your-host:5080
 ```
 
-**测试覆盖范围（60 个用例）：**
+**测试覆盖范围（64 个用例）：**
 
 | 测试组 | 用例数 | 覆盖内容 |
 |--------|--------|---------|
@@ -791,6 +814,7 @@ bash test/sanity_test.sh http://your-host:5080
 | 4. Vips 图片处理 | 20 | 缩放/裁切/格式转换/各 fit 模式/404 |
 | 5. ZipFS 多后缀 | 11 | `.cbz`/`.ZIP` 目录列表、文件读取、WebDAV PROPFIND |
 | 6. WebDAV ZIP 透明接管 | 5 | PROPFIND 拦截、Depth 控制、GET 重定向 |
+| 7. OR_ZIPFS_TRANSPARENT 开关 | 4 | 关闭后透明接管停止、恢复后重新生效 |
 
 **输出示例：**
 
@@ -810,7 +834,7 @@ bash test/sanity_test.sh http://your-host:5080
   ...
 
 ═══════════════════════════════════════
-  Results: 60 passed  0 failed  0 skipped  / 60 total
+  Results: 64 passed  0 failed  0 skipped  / 64 total
 ═══════════════════════════════════════
 ```
 

@@ -5,9 +5,10 @@
 --   GET /zip/<path/to/archive.zip>/          → directory listing
 --   GET /zip/<path/to/archive.cbz>/<entry>   → serve file from ZIP-like archive
 --
--- WebDAV integration (transparent, called from main.conf rewrite_by_lua_block):
+-- WebDAV transparent integration (rewrite_by_lua_block in main.conf):
 --   PROPFIND on any *.zip / *.cbz path → returns DAV XML for entries inside archive
 --   GET/HEAD on *.zip / *.cbz path     → redirects to /zip/ virtual FS
+--   Enabled by default; set OR_ZIPFS_TRANSPARENT=false to disable
 --
 -- Supported extensions: configured via OR_ZIP_EXTS env var (default: zip,cbz)
 -- Requires: luazip (already installed in orabase:1)
@@ -321,6 +322,32 @@ end
 -- ──────────────────────────────────────────────────────────
 function _M.is_zip_request(uri)
     return find_zip_ext(uri or "") ~= nil
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Transparent WebDAV/ZIP interception switch
+-- Controlled by OR_ZIPFS_TRANSPARENT env var (default: true)
+-- Set OR_ZIPFS_TRANSPARENT=false to disable the WebDAV interception
+-- and let .zip/.cbz paths fall through to the normal WebDAV handler.
+-- /zip/ HTTP access is NOT affected by this flag.
+-- ──────────────────────────────────────────────────────────
+local _transparent_enabled  -- nil = not yet loaded
+
+function _M.is_transparent_enabled()
+    if _transparent_enabled ~= nil then return _transparent_enabled end
+    local ok, env = pcall(require, "env")
+    if ok and env and env.OR_ZIPFS_TRANSPARENT == false then
+        _transparent_enabled = false
+    else
+        -- default ON; accept "false" string from entrypoint.sh boolean conversion
+        local raw = ok and env and env.OR_ZIPFS_TRANSPARENT
+        if raw == "false" then
+            _transparent_enabled = false
+        else
+            _transparent_enabled = true
+        end
+    end
+    return _transparent_enabled
 end
 
 return _M

@@ -403,6 +403,68 @@ else
 fi
 
 # =============================================================================
+# 7. OR_ZIPFS_TRANSPARENT switch (disable / re-enable transparent interception)
+# =============================================================================
+section "7. OR_ZIPFS_TRANSPARENT — Transparent ZIP Switch"
+
+CONTAINER="${CONTAINER:-yot}"
+
+# Helper: inject OR_ZIPFS_TRANSPARENT into the running container's env.lua
+_set_transparent() {
+    local val="$1"  # true / false
+    docker exec "$CONTAINER" sh -c "
+        sed -i '/OR_ZIPFS_TRANSPARENT/d' /usr/local/openresty/nginx/lua/env.lua
+        sed -i 's/^local _M = {/local _M = {\nOR_ZIPFS_TRANSPARENT='\"$val\"',/' \
+            /usr/local/openresty/nginx/lua/env.lua
+        nginx -s reload
+        sleep 0.4
+    " >/dev/null 2>&1
+}
+
+# ── 7a. Disable transparent interception ──────────────────
+_set_transparent false
+
+# PROPFIND on .zip should now fall through to plain WebDAV (207 from nginx dav_ext)
+# OR 200/404 depending on the file — anything but our custom zipfs multistatus
+# We verify: the response does NOT contain our custom zipfs <D:multistatus> XML
+PROPFIND_BODY=$(curl -s -X PROPFIND "${BASE_URL}/archives/test_assets.zip" \
+    -H "Depth: 1" -H "Content-Length: 0" 2>/dev/null)
+if echo "$PROPFIND_BODY" | grep -q "href.*index\.html"; then
+    fail "Transparent OFF: PROPFIND still returned zipfs inner-entry listing"
+else
+    pass "Transparent OFF: PROPFIND no longer lists ZIP inner entries"
+fi
+
+# GET redirect should NOT happen — should return plain file download (200) or WebDAV 404
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    "${BASE_URL}/archives/test_assets.zip/index.html")
+if [[ "$HTTP_CODE" == "302" ]]; then
+    fail "Transparent OFF: GET .zip still redirected to /zip/ (HTTP 302)"
+else
+    pass "Transparent OFF: GET .zip/inner no longer redirects (HTTP $HTTP_CODE)"
+fi
+
+# ── 7b. Re-enable transparent interception ────────────────
+_set_transparent true
+
+# PROPFIND should return our zipfs multistatus XML again
+PROPFIND_BODY=$(curl -s -X PROPFIND "${BASE_URL}/archives/test_assets.zip" \
+    -H "Depth: 1" -H "Content-Length: 0" 2>/dev/null)
+if echo "$PROPFIND_BODY" | grep -q "multistatus"; then
+    pass "Transparent ON (re-enabled): PROPFIND returns zipfs multistatus"
+else
+    fail "Transparent ON (re-enabled): PROPFIND missing multistatus XML"
+fi
+
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    "${BASE_URL}/archives/test_assets.zip/index.html")
+if [[ "$HTTP_CODE" == "302" || "$HTTP_CODE" == "200" ]]; then
+    pass "Transparent ON (re-enabled): GET .zip entry redirects or serves (HTTP $HTTP_CODE)"
+else
+    fail "Transparent ON (re-enabled): GET .zip unexpected status HTTP $HTTP_CODE"
+fi
+
+# =============================================================================
 # SUMMARY
 # =============================================================================
 TOTAL=$((PASS + FAIL + SKIP))
