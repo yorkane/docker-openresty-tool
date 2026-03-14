@@ -13,8 +13,11 @@ services:
       - GID=1000
       - UID=1000
       # - OR_AUTH_USER=admin:admin
+    entrypoint: ["sh", "/usr/local/openresty/nginx/conf/entrypoint.sh"]
     volumes:
-      - /data:/webdav
+      - ./data:/webdav
+      - ./data:/data
+      - ./nginx:/usr/local/openresty/nginx
     restart: unless-stopped
     ports:
       - "5080:80"
