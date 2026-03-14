@@ -3,6 +3,12 @@
 --
 -- Route:  GET /api/ls/<path>
 --
+-- The path may point to:
+--   a) A real filesystem directory         → lists its direct children
+--   b) A path that crosses a ZIP boundary  → lists the ZIP's internal directory
+--      e.g. /api/ls/archives/book.cbz/      lists the ZIP root
+--           /api/ls/archives/book.cbz/ch1/  lists the "ch1/" directory inside the ZIP
+--
 -- Query params:
 --   page      (int ≥1, default 1)      — page number, 1-based
 --   page_size (int ≥1, default 50)     — items per page, capped at OR_API_PAGE_SIZE_MAX (default 200)
@@ -21,9 +27,16 @@
 --   }
 --
 -- Item "type" values:
---   "dir"  — real filesystem directory
+--   "dir"  — real filesystem directory (or virtual directory inside a ZIP)
 --   "zip"  — ZIP-like file (ext in OR_ZIP_EXTS) when OR_ZIPFS_TRANSPARENT is enabled
 --   "file" — regular file (or zip-like when transparent is disabled)
+--
+-- ZIP behaviour:
+--   When the request path crosses a ZIP file boundary, the ZIP's internal
+--   directory is listed transparently — regardless of OR_ZIPFS_TRANSPARENT.
+--   (OR_ZIPFS_TRANSPARENT only affects whether a .zip *file* shows as "zip"
+--    vs "file" in a normal directory listing; once you're *inside* a ZIP the
+--    API always serves the inner structure.)
 --
 -- Error responses: 400 | 404 | 500
 --   { "error": "<code>", "message": "<detail>" }
@@ -34,6 +47,40 @@
 --   OR_ZIP_EXTS           — which extensions count as zip (default zip,cbz)
 
 local _M = {}
+
+-- ──────────────────────────────────────────────────────────
+-- ZIP extension set (mirrors zipfs.lua logic, cached per worker)
+-- ──────────────────────────────────────────────────────────
+local _zip_exts_cache
+
+local function get_zip_exts()
+    if _zip_exts_cache then return _zip_exts_cache end
+    local raw = "zip,cbz"
+    local ok, env = pcall(require, "env")
+    if ok and env and env.OR_ZIP_EXTS and env.OR_ZIP_EXTS ~= "" then
+        raw = env.OR_ZIP_EXTS
+    end
+    _zip_exts_cache = {}
+    for ext in raw:gmatch("[^,;%s]+") do
+        _zip_exts_cache[ext:lower()] = true
+    end
+    return _zip_exts_cache
+end
+
+-- Find position (end index) of first zip-ext occurrence in s (case-insensitive)
+-- Returns: end_pos (1-based, inclusive), or nil
+local function find_zip_boundary(s)
+    local exts = get_zip_exts()
+    local best = nil
+    for ext in pairs(exts) do
+        local pat = "%." .. ext  -- simple pattern, ext has no specials
+        local i, j = s:lower():find(pat)
+        if i and (not best or i < best) then
+            best = j
+        end
+    end
+    return best
+end
 
 -- ──────────────────────────────────────────────────────────
 -- FFI: opendir / readdir / closedir / stat (musl libc, aarch64/x86_64)
@@ -171,6 +218,87 @@ local function do_stat(path)
 end
 
 -- ──────────────────────────────────────────────────────────
+-- List the contents of a virtual directory inside a ZIP file.
+--
+-- zip_path : absolute filesystem path to the .zip / .cbz file
+-- inner    : path inside the ZIP, "" or "subdir/nested/" (always ends with /
+--            unless it is the root "")
+-- Returns  : items_all (sorted), or nil + err_string
+-- ──────────────────────────────────────────────────────────
+local function list_zip_dir(zip_path, inner)
+    -- Normalise inner prefix: must end with "/" (except for root = "")
+    local prefix = inner
+    if prefix ~= "" and prefix:sub(-1) ~= "/" then
+        prefix = prefix .. "/"
+    end
+
+    -- Open the ZIP archive via luazip
+    local ok, zf = pcall(require("zip").open, zip_path)
+    if not ok or not zf then
+        return nil, "cannot open zip: " .. zip_path
+    end
+
+    -- Collect all entries (flat list of full paths inside the ZIP)
+    local all_entries = {}
+    for e in zf:files() do
+        local name = e.filename or ""
+        all_entries[#all_entries+1] = {
+            name = name,
+            size = e.uncompressed_size or 0,
+            is_dir = name:sub(-1) == "/",
+        }
+    end
+    zf:close()
+
+    -- Extract direct children of `prefix`
+    local items = {}
+    local seen  = {}
+    for _, e in ipairs(all_entries) do
+        local name = e.name
+        -- must start with our prefix
+        if name:sub(1, #prefix) == prefix then
+            local rel = name:sub(#prefix + 1)
+            if rel ~= "" then
+                local slash = rel:find("/")
+                if slash then
+                    -- sub-directory (first path component before /)
+                    local dname = rel:sub(1, slash - 1)
+                    if dname ~= "" and not seen[dname] then
+                        seen[dname] = true
+                        items[#items+1] = {
+                            name  = dname,
+                            type  = "dir",
+                            size  = 0,
+                            mtime = "",
+                            ctime = "",
+                        }
+                    end
+                else
+                    -- direct file inside this directory
+                    items[#items+1] = {
+                        name  = rel,
+                        type  = "file",
+                        size  = e.size,
+                        mtime = "",
+                        ctime = "",
+                    }
+                end
+            end
+        end
+    end
+
+    -- Sort: dirs first (alpha), then files (alpha)
+    table.sort(items, function(a, b)
+        local ta = (a.type == "dir") and 0 or 1
+        local tb = (b.type == "dir") and 0 or 1
+        if ta ~= tb then return ta < tb end
+        return a.name:lower() < b.name:lower()
+    end)
+
+    return items, nil
+end
+
+-- ──────────────────────────────────────────────────────────
 -- List a real filesystem directory via FFI
 -- Returns: items_all (sorted), or nil + err_string
 -- ──────────────────────────────────────────────────────────
@@ -271,6 +399,58 @@ function _M.handle(webdav_root)
         return send_json(400, encode_err("bad_request", "path traversal not allowed"))
     end
 
+    -- strip leading slash for boundary detection (work on the bare relative path)
+    local bare = rel_path:gsub("^/+", "")
+
+    -- ── Check whether the path crosses a ZIP boundary ──────────────────────
+    -- e.g. bare = "archives/book.cbz/ch1/page01.html"
+    --      zip_end = position of the last char of ".cbz"
+    --      zip_rel = "archives/book.cbz"
+    --      inner   = "ch1/page01.html"
+    local zip_end = find_zip_boundary(bare)
+
+    if zip_end then
+        -- Path contains a zip-like extension.
+        -- Split into: filesystem part up to & including the zip file,
+        -- and the inner path inside the ZIP.
+        local zip_rel = bare:sub(1, zip_end)        -- e.g. "archives/book.cbz"
+        local inner   = bare:sub(zip_end + 1):gsub("^/+", ""):gsub("/+$", "")
+        -- inner: "" means ZIP root, "ch1" means subdir "ch1/"
+
+        local zip_path = webdav_root .. "/" .. zip_rel
+
+        -- Verify the ZIP file actually exists on disk
+        local zip_attr = do_stat(zip_path)
+        if not zip_attr then
+            return send_json(404, encode_err("not_found", "zip not found"))
+        end
+        if zip_attr.is_dir then
+            -- The extension matched something that turned out to be a directory
+            -- (e.g. a folder literally named "foo.zip" — unlikely, fall through)
+            return send_json(404, encode_err("not_found", "path is a directory, not a zip file"))
+        end
+
+        -- List the ZIP's inner directory
+        local all_items, err = list_zip_dir(zip_path, inner)
+        if not all_items then
+            return send_json(500, encode_err("internal", err or "zip listing failed"))
+        end
+
+        -- Display path: /archives/book.cbz[/inner]
+        local display_zip = "/" .. zip_rel
+        local display = (inner == "" and display_zip or (display_zip .. "/" .. inner))
+
+        local page_items, total = paginate(all_items, page, page_size)
+        return send_json(200, encode_ok({
+            path      = display,
+            page      = page,
+            page_size = page_size,
+            total     = total,
+            items     = page_items,
+        }))
+    end
+
+    -- ── Normal filesystem directory ─────────────────────────────────────────
     local fs_path = webdav_root .. rel_path:gsub("/+$", "")
     if fs_path == "" or fs_path == webdav_root then fs_path = webdav_root end
 

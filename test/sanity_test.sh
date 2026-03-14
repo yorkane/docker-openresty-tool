@@ -12,7 +12,11 @@
 #   2. WebDAV basic operations
 #   3. ZipFS — directory listing & file serving via HTTP
 #   4. Vips — image processing (resize / crop / format conversion)
-#   5. WebDAV ZIP transparent access (PROPFIND interception)
+#   5. ZipFS — multi-extension (.cbz / uppercase .ZIP)
+#   6. WebDAV ZIP transparent access (PROPFIND interception)
+#   7. OR_ZIPFS_TRANSPARENT switch (enable / disable)
+#   8. Directory JSON API (/api/ls/) — basic, pagination, error, transparent-OFF
+#   9. Directory JSON API (/api/ls/) — ZIP internal directory browsing
 #
 # Requirements:
 #   - curl
@@ -563,6 +567,87 @@ else
     pass "API transparent OFF: zip files return as type=file"
 fi
 _set_transparent true
+
+# =============================================================================
+# 9. ZIP internal directory browsing via /api/ls/
+# =============================================================================
+section "9. /api/ls/ — ZIP Internal Directory Browsing"
+
+# ── 9a. List ZIP root (e.g. /api/ls/archives/test_assets.zip) ──
+ZIP_ROOT=$(curl -s "${BASE_URL}/api/ls/archives/test_assets.zip" 2>/dev/null)
+ZIP_ROOT_SLASH=$(curl -s "${BASE_URL}/api/ls/archives/test_assets.zip/" 2>/dev/null)
+
+if echo "$ZIP_ROOT" | grep -q '"items"'; then
+    pass "ZIP root listing: response contains 'items'"
+else
+    fail "ZIP root listing: response missing 'items'"
+fi
+if echo "$ZIP_ROOT" | grep -q '"type":"dir"'; then
+    pass "ZIP root listing: inner directories shown as type=dir"
+else
+    fail "ZIP root listing: inner directories missing type=dir"
+fi
+if echo "$ZIP_ROOT" | grep -q '"type":"file"'; then
+    pass "ZIP root listing: inner files shown as type=file"
+else
+    fail "ZIP root listing: inner files missing type=file"
+fi
+# trailing slash variant should return the same total
+TOTAL_NO_SLASH=$(echo "$ZIP_ROOT"       | grep -o '"total":[0-9]*' | grep -o '[0-9]*')
+TOTAL_SLASH=$(echo   "$ZIP_ROOT_SLASH"  | grep -o '"total":[0-9]*' | grep -o '[0-9]*')
+if [[ -n "$TOTAL_NO_SLASH" && "$TOTAL_NO_SLASH" == "$TOTAL_SLASH" ]]; then
+    pass "ZIP root listing: trailing-slash variant returns same total ($TOTAL_NO_SLASH)"
+else
+    fail "ZIP root listing: trailing-slash mismatch (no-slash=$TOTAL_NO_SLASH, slash=$TOTAL_SLASH)"
+fi
+
+# ── 9b. List a subdirectory inside the ZIP ──
+ZIP_SUBDIR=$(curl -s "${BASE_URL}/api/ls/archives/test_assets.zip/images" 2>/dev/null)
+if echo "$ZIP_SUBDIR" | grep -q '"items"'; then
+    pass "ZIP subdir listing: /images/ returns items"
+else
+    fail "ZIP subdir listing: /images/ missing items"
+fi
+if echo "$ZIP_SUBDIR" | grep -q '"name":"red-800x600.png"'; then
+    pass "ZIP subdir listing: PNG file found inside images/"
+else
+    fail "ZIP subdir listing: red-800x600.png not found in images/"
+fi
+if echo "$ZIP_SUBDIR" | grep -qE '"size":[1-9]'; then
+    pass "ZIP subdir listing: file size is non-zero"
+else
+    fail "ZIP subdir listing: file size is zero or missing"
+fi
+
+# ── 9c. Display path is correct ──
+ZIP_PATH_VAL=$(echo "$ZIP_ROOT" | grep -o '"path":"[^"]*"' | head -1)
+if echo "$ZIP_PATH_VAL" | grep -q "test_assets.zip"; then
+    pass "ZIP root listing: path field contains zip filename"
+else
+    fail "ZIP root listing: path field incorrect (got: $ZIP_PATH_VAL)"
+fi
+
+# ── 9d. .cbz should also work ──
+CBZ_ROOT=$(curl -s "${BASE_URL}/api/ls/archives/test_assets.cbz" 2>/dev/null)
+if echo "$CBZ_ROOT" | grep -q '"items"'; then
+    pass "CBZ listing: /api/ls on .cbz returns items"
+else
+    fail "CBZ listing: /api/ls on .cbz missing items"
+fi
+
+# ── 9e. Pagination inside ZIP ──
+ZIP_PAGE1=$(curl -s "${BASE_URL}/api/ls/archives/test_assets.zip/images?page_size=1" 2>/dev/null)
+if echo "$ZIP_PAGE1" | grep -q '"page_size":1'; then
+    pass "ZIP listing pagination: page_size=1 reflected"
+else
+    fail "ZIP listing pagination: page_size not reflected"
+fi
+ZIP_TOTAL=$(echo "$ZIP_PAGE1" | grep -o '"total":[0-9]*' | grep -o '[0-9]*')
+if [[ -n "$ZIP_TOTAL" && "$ZIP_TOTAL" -ge 1 ]]; then
+    pass "ZIP listing pagination: total is at least 1 ($ZIP_TOTAL)"
+else
+    fail "ZIP listing pagination: total missing or zero"
+fi
 
 # =============================================================================
 # SUMMARY

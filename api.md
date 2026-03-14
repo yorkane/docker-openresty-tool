@@ -8,6 +8,16 @@
 
 列出指定目录下的子目录和文件，返回 JSON 格式，支持分页。
 
+`<path>` 支持两种寻址模式：
+
+| 模式 | 示例 | 说明 |
+|------|------|------|
+| **普通目录** | `/api/ls/archives` | 列出文件系统目录的直接子项 |
+| **ZIP 内部路径** | `/api/ls/archives/book.cbz` | 列出 ZIP 文件根目录的内容 |
+| **ZIP 子目录** | `/api/ls/archives/book.cbz/chapter1` | 列出 ZIP 内部 `chapter1/` 目录的内容 |
+
+当路径中包含 ZIP 兼容扩展名（由 `OR_ZIP_EXTS` 配置）时，API 自动切换为 **ZIP 内部浏览模式**，无论 `OR_ZIPFS_TRANSPARENT` 的状态如何。
+
 ### 路由
 
 ```
@@ -18,6 +28,7 @@ GET /api/ls/<path>?page=<N>&page_size=<N>
 - `<path>` 相对于 WebDAV 根目录（`/webdav`，可通过 nginx 变量 `$webdav_root` 配置）
 - 路径两端的斜线可选：`/api/ls/archives` 和 `/api/ls/archives/` 效果相同
 - **只列出当前目录的直接子项**，不递归展开子目录
+- 当 `<path>` 中含有 ZIP 兼容扩展名时（如 `.zip`、`.cbz`），自动进入 **ZIP 内部浏览模式**
 
 ### 查询参数
 
@@ -86,9 +97,11 @@ GET /api/ls/<path>?page=<N>&page_size=<N>
 
 | 值 | 含义 |
 |----|------|
-| `"dir"` | 普通文件系统目录 |
-| `"file"` | 普通文件 |
+| `"dir"` | 普通文件系统目录，**或** ZIP 内部的虚拟子目录 |
+| `"file"` | 普通文件，**或** ZIP 内部的普通文件 |
 | `"zip"` | ZIP 兼容压缩包（扩展名匹配 `OR_ZIP_EXTS`），**且** `OR_ZIPFS_TRANSPARENT=true`（默认）。关闭后返回 `"file"` |
+
+> **注意**：在 ZIP 内部浏览模式下，`mtime` 和 `ctime` 字段为空字符串 `""`（ZIP 格式的内部时间戳精度有限，luazip 不对外暴露，因此不填充）。
 
 #### 排序规则
 
@@ -110,9 +123,9 @@ GET /api/ls/<path>?page=<N>&page_size=<N>
 | HTTP 状态 | error 代码 | 触发条件 |
 |-----------|-----------|----------|
 | `400` | `bad_request` | 路径包含 `..`（路径穿越检测） |
-| `404` | `not_found` | 路径不存在 |
-| `404` | `not_found` | 路径存在但不是目录（是普通文件） |
-| `500` | `internal` | 无法打开目录（权限不足等） |
+| `404` | `not_found` | 路径不存在（文件系统或 ZIP 文件均不存在） |
+| `404` | `not_found` | 路径存在但不是目录（是普通文件且不含 ZIP 扩展名） |
+| `500` | `internal` | 无法打开目录或 ZIP 文件（权限不足、文件损坏等） |
 
 ---
 
@@ -158,6 +171,54 @@ curl http://localhost:5080/api/ls/archives
   ]
 }
 ```
+
+### 浏览 ZIP 内部结构
+
+直接在路径中"进入" ZIP 文件，API 会透明地列出 ZIP 内部内容：
+
+```bash
+# 列出 ZIP 文件的根目录
+curl http://localhost:5080/api/ls/archives/book.cbz
+```
+
+```json
+{
+  "path": "/archives/book.cbz",
+  "page": 1,
+  "page_size": 50,
+  "total": 4,
+  "items": [
+    { "name": "chapter1", "type": "dir",  "size": 0, "mtime": "", "ctime": "" },
+    { "name": "chapter2", "type": "dir",  "size": 0, "mtime": "", "ctime": "" },
+    { "name": "cover.jpg","type": "file", "size": 204800, "mtime": "", "ctime": "" },
+    { "name": "info.txt", "type": "file", "size": 512,    "mtime": "", "ctime": "" }
+  ]
+}
+```
+
+```bash
+# 列出 ZIP 内部子目录
+curl http://localhost:5080/api/ls/archives/book.cbz/chapter1
+```
+
+```json
+{
+  "path": "/archives/book.cbz/chapter1",
+  "page": 1,
+  "page_size": 50,
+  "total": 3,
+  "items": [
+    { "name": "page001.jpg", "type": "file", "size": 102400, "mtime": "", "ctime": "" },
+    { "name": "page002.jpg", "type": "file", "size": 98304,  "mtime": "", "ctime": "" },
+    { "name": "page003.jpg", "type": "file", "size": 110592, "mtime": "", "ctime": "" }
+  ]
+}
+```
+
+> **说明**：
+> - ZIP 内部浏览模式下 `mtime` 和 `ctime` 为空字符串（ZIP 格式时间戳不通过 luazip 暴露）
+> - ZIP 内部模式不受 `OR_ZIPFS_TRANSPARENT` 影响——只要路径中含有 ZIP 扩展名，就会进入 ZIP 内部
+> - 这与 `/zip/` 端点共享同一个 ZIP 文件（luazip），内容完全一致
 
 ### 分页
 
@@ -236,8 +297,12 @@ services:
 ## 实现说明
 
 - **模块**：`nginx/lua/lib/dirapi.lua`
-- **底层**：通过 LuaJIT FFI 调用 POSIX `opendir` / `readdir` / `stat`，无外部依赖
-- **时间**：读取 `st_mtime`（修改时间）和 `st_ctime`（inode 变更时间），格式化为 UTC ISO-8601
-- **ZIP 检测**：委托给 `lib.zipfs.is_zip_request()` 和 `is_transparent_enabled()`，配置保持一致
+- **普通目录**：通过 LuaJIT FFI 调用 POSIX `opendir` / `readdir` / `stat`，无外部依赖
+- **ZIP 内部浏览**：通过 `luazip` 库迭代 ZIP 中央目录，提取直接子项（子目录/文件）
+- **路径路由**：解析请求路径中是否包含配置的 ZIP 扩展名；有则进入 ZIP 模式，无则进入文件系统模式
+- **时间**：
+  - 普通目录：读取 `st_mtime` / `st_ctime`，格式化为 UTC ISO-8601
+  - ZIP 内部：返回空字符串（luazip 不暴露 ZIP 内部时间戳）
+- **ZIP 检测**：ZIP 扩展名读取 `OR_ZIP_EXTS` 环境变量，与 `lib.zipfs` 保持一致
 - **安全性**：检测路径中的 `..` 并返回 400；`Cache-Control: no-store` 防止缓存
 - **JSON**：内置极简编码器，无需 `cjson` 依赖（字符串特殊字符均正确转义）
