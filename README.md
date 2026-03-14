@@ -28,12 +28,21 @@
   - [启用 ACME 自动证书（Let's Encrypt）](#启用-acme-自动证书lets-encrypt)
 - [HTTP 基础认证](#http-基础认证)
 - [WebDAV 服务](#webdav-服务)
+- [ZipFS — ZIP 虚拟文件系统](#zipfs--zip-虚拟文件系统)
+  - [HTTP 访问 ZIP 内容](#http-访问-zip-内容)
+  - [WebDAV 透明接管](#webdav-透明接管)
+  - [支持的 MIME 类型](#支持的-mime-类型)
+- [Vips — 动态图片处理](#vips--动态图片处理)
+  - [URL 参数说明](#url-参数说明)
+  - [使用示例](#使用示例)
+  - [响应头说明](#响应头说明)
 - [Wake-on-LAN（网络唤醒）](#wake-on-lan网络唤醒)
 - [Mock 接口](#mock-接口)
 - [自定义配置](#自定义配置)
 - [从源码构建镜像](#从源码构建镜像)
   - [构建基础镜像](#构建基础镜像)
   - [构建工具镜像](#构建工具镜像)
+- [测试](#测试)
 - [调试与运维](#调试与运维)
 - [已知问题与修复记录](#已知问题与修复记录)
 - [许可证](#许可证)
@@ -49,6 +58,8 @@
 - 精选的 Lua 第三方库（ACME、HTTP 客户端、模板引擎、加密库等）
 - 灵活的容器启动入口（环境变量驱动配置，支持 `envsubst` 模板渲染）
 - 开箱即用的应用内置脚本（WebDAV、WoL、Basic Auth、Mock）
+- **动态图片处理**（libvips + lua-vips，支持裁切、缩放、格式转换）
+- **ZIP 虚拟文件系统**（透过 HTTP 和 WebDAV 直接浏览和访问 ZIP 内部文件）
 
 ---
 
@@ -98,6 +109,8 @@ docker-openresty-tool/
 ├── docker-compose.yml       # 快速启动编排文件
 ├── LICENSE                  # MIT 许可证
 ├── README.md
+├── test/
+│   └── sanity_test.sh       # Sanity 测试脚本（49 个用例）
 └── nginx/                   # 挂载到容器 /usr/local/openresty/nginx
     ├── cert/                # SSL 账户密钥存放目录（.gitignore 中）
     ├── conf/                # Nginx 配置文件
@@ -109,9 +122,9 @@ docker-openresty-tool/
     │   ├── stream.conf      # TCP/UDP 流代理配置
     │   ├── cert/            # 默认证书目录（default.key / default.pem）
     │   ├── default_app/     # 默认虚拟主机配置
-    │   │   ├── main.conf        # 主 server 块（location 规则）
+    │   │   ├── main.conf        # 主 server 块（location 规则，含 /img/ /zip/）
     │   │   ├── http_servers.conf# 额外 server 块（HTTP/HTTPS）
-    │   │   ├── extra.conf       # 额外 location 块
+    │   │   ├── extra.conf       # 顶层扩展配置（stream 级）
     │   │   └── init_worker.lua  # worker 初始化 Lua 脚本
     │   ├── extra/           # 用户自定义扩展配置目录
     │   └── inc/             # 公共 include 片段（mime.types 等）
@@ -125,8 +138,10 @@ docker-openresty-tool/
         └── lib/             # 内置 Lua 库
             ├── basic_auth.lua   # HTTP 基础认证
             ├── tap.lua          # 流量 Tap / 调试工具
+            ├── vips.lua         # 动态图片处理（libvips + lua-vips）★新增
             ├── webdav.lua       # WebDAV 处理器
-            └── wol.lua          # Wake-on-LAN（网络唤醒）
+            ├── wol.lua          # Wake-on-LAN（网络唤醒）
+            └── zipfs.lua        # ZIP 虚拟文件系统★新增
 ```
 
 ---
@@ -138,6 +153,8 @@ docker-openresty-tool/
 | **自动 HTTPS（ACME）** | 对接 Let's Encrypt，自动签发/续期证书 | `OR_ACME=true` + 配置 `init.lua` |
 | **HTTP Basic Auth** | 对任意 location 开启用户名密码保护 | `OR_AUTH_USER=user:pass` |
 | **WebDAV** | 将挂载目录作为 WebDAV 文件服务器 | 默认挂载数据目录到 `/webdav` |
+| **ZipFS（新）** | 通过 HTTP/WebDAV 直接浏览和访问 ZIP 内部文件 | 访问 `/zip/<path>.zip/...` |
+| **Vips 图片处理（新）** | 动态裁切、缩放、格式转换（libvips） | 访问 `/img/<path>?w=300&fmt=webp` |
 | **FancyIndex** | 美观的目录浏览页面 | 在 location 中启用 `fancyindex on` |
 | **Wake-on-LAN** | 通过 HTTP 接口远程唤醒局域网设备 | 调用 `lib/wol.lua` |
 | **Mock 接口** | 快速返回 JSON/文本模拟响应 | 访问 `/mock/` 路径 |
@@ -159,7 +176,8 @@ docker-openresty-tool/
 | `lua-resty-template` | 高性能 Lua 模板引擎 |
 | `lua-ffi-zlib` | zlib 压缩 FFI 绑定 |
 | `luasocket` | TCP/UDP Socket 库 |
-| `luazip` | ZIP 文件处理 |
+| `luazip` | ZIP 文件处理（ZipFS 功能依赖） |
+| `lua-vips` | libvips 图片处理绑定（Vips 功能依赖） |
 
 ### 手动集成的库
 
@@ -433,6 +451,192 @@ curl -X MKCOL http://localhost:5080/newdir/
 
 ---
 
+## ZipFS — ZIP 虚拟文件系统
+
+ZipFS 允许将 ZIP 压缩包当作一个**只读目录**来访问，无需解压即可通过 HTTP 浏览目录、下载内部文件，或通过 WebDAV 挂载后无缝透明访问。
+
+实现模块：`nginx/lua/lib/zipfs.lua`（依赖 `luazip`）
+
+### HTTP 访问 ZIP 内容
+
+URL 格式：
+```
+GET /zip/<webdav_root相对路径>/<zip文件名>.zip/[内部路径]
+```
+
+**示例：**
+
+```bash
+# 查看 ZIP 根目录列表（HTML 页面）
+curl http://localhost:5080/zip/archives/myarchive.zip/
+
+# 访问 ZIP 内部子目录
+curl http://localhost:5080/zip/archives/myarchive.zip/images/
+
+# 读取 ZIP 内部文件
+curl http://localhost:5080/zip/archives/myarchive.zip/index.html
+
+# 读取 ZIP 内深层文件
+curl http://localhost:5080/zip/archives/myarchive.zip/docs/readme.md
+
+# 读取 ZIP 内图片
+curl -o out.png http://localhost:5080/zip/archives/myarchive.zip/images/logo.png
+```
+
+**目录列表效果（浏览器访问）：**
+
+浏览器打开 `/zip/archives/myarchive.zip/` 会显示类 VS Code 暗色主题目录页，包含：
+- 可点击的子目录和文件链接
+- 文件大小信息
+- 上级目录返回链接（`..`）
+
+**响应头：**
+
+| 响应头 | 值 | 说明 |
+|--------|-----|------|
+| `X-ZipFS` | `dir-listing` | 当前响应为目录列表页 |
+| `X-ZipFS` | `file` | 当前响应为 ZIP 内部文件 |
+| `Content-Type` | 自动推断 | 根据文件扩展名设置 |
+| `Cache-Control` | `public, max-age=3600` | 文件响应 1 小时缓存 |
+
+**404 场景：**
+- ZIP 文件不存在：`/zip/archives/nonexistent.zip/` → `404`
+- ZIP 内路径不存在：`/zip/archives/myarchive.zip/no-such-file.txt` → `404`
+
+---
+
+### WebDAV 透明接管
+
+WebDAV 客户端（如 Finder、Cyberduck、davfs2）访问 WebDAV 服务时，如果请求路径包含 `.zip` 文件：
+
+- **`PROPFIND` 请求** → 自动返回 ZIP 内部文件结构的 DAV XML 响应（`207 Multi-Status`），ZIP 文件看起来就像一个目录
+- **`GET` / `HEAD` 请求** → 自动 302 跳转到 `/zip/` 虚拟路径
+
+无需客户端做任何特殊配置，WebDAV 客户端可以像浏览普通目录一样浏览 ZIP 内容。
+
+```bash
+# WebDAV PROPFIND — ZIP 文件被当作目录返回其内容
+curl -X PROPFIND http://localhost:5080/archives/myarchive.zip \
+     -H "Depth: 1"
+# → 207 XML，包含 ZIP 内部的所有文件和目录
+
+# WebDAV PROPFIND Depth:0 — 仅返回 ZIP 自身信息
+curl -X PROPFIND http://localhost:5080/archives/myarchive.zip \
+     -H "Depth: 0"
+```
+
+---
+
+### 支持的 MIME 类型
+
+ZipFS 根据文件扩展名自动设置 Content-Type：
+
+| 扩展名 | Content-Type |
+|--------|-------------|
+| `.html`, `.htm` | `text/html; charset=utf-8` |
+| `.css` | `text/css` |
+| `.js` | `application/javascript` |
+| `.json` | `application/json` |
+| `.png` | `image/png` |
+| `.jpg`, `.jpeg` | `image/jpeg` |
+| `.webp` | `image/webp` |
+| `.svg` | `image/svg+xml` |
+| `.pdf` | `application/pdf` |
+| `.md`, `.txt` | `text/plain; charset=utf-8` |
+| 其他 | `application/octet-stream` |
+
+---
+
+## Vips — 动态图片处理
+
+Vips 通过 [libvips](https://www.libvips.org/) 实现高性能动态图片处理，支持缩放、裁切和格式转换，无需预生成缩略图。
+
+实现模块：`nginx/lua/lib/vips.lua`（依赖 `lua-vips` + `libvips`）  
+图片来源：与 WebDAV 共享同一个根目录（`$webdav_root` = `/webdav`）
+
+### URL 参数说明
+
+URL 格式：
+```
+GET /img/<webdav_root相对路径>?[参数]
+```
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `w` | 目标宽度（像素） | `w=400` |
+| `h` | 目标高度（像素） | `h=300` |
+| `fit` | 缩放模式（见下表） | `fit=cover` |
+| `crop` | 先裁切再缩放，格式 `x,y,宽,高` | `crop=100,50,600,400` |
+| `fmt` | 输出格式：`jpeg` \| `webp` \| `png` \| `avif` \| `gif` | `fmt=webp` |
+| `q` | 质量 1–100（jpeg/webp/avif，默认 82） | `q=80` |
+
+**`fit` 缩放模式：**
+
+| 值 | 说明 |
+|----|------|
+| `contain`（默认）| 保持宽高比，缩放到 `w`×`h` 框内 |
+| `cover` | 保持宽高比，缩放覆盖 `w`×`h` 框，并居中裁切 |
+| `fill` | 拉伸到精确的 `w`×`h`（不保持宽高比） |
+| `scale` | 按 `w` 等比例缩放（忽略 `h`） |
+
+**快速通道（无参数时直接透传）：**
+
+当 URL 不包含任何处理参数时，直接流式返回原始文件，不经过 libvips 处理，性能最优。
+
+### 使用示例
+
+```bash
+# 按宽度缩放（保持比例）
+curl "http://localhost:5080/img/images/photo.jpg?w=400"
+
+# 指定宽高（contain 模式，不裁切）
+curl "http://localhost:5080/img/images/photo.jpg?w=300&h=200"
+
+# Cover 模式（覆盖填充，居中裁切）
+curl "http://localhost:5080/img/images/photo.jpg?w=200&h=200&fit=cover"
+
+# 转换格式为 WebP + 调整质量
+curl "http://localhost:5080/img/images/photo.png?fmt=webp&q=75"
+
+# 先裁切 (x=100, y=50, w=600, h=400) 再缩放到 300px 宽，输出 AVIF
+curl "http://localhost:5080/img/images/photo.jpg?crop=100,50,600,400&w=300&fmt=avif&q=70"
+
+# 等比缩放宽度
+curl "http://localhost:5080/img/images/photo.jpg?w=800&fit=scale"
+
+# 直接透传（不处理，仅返回原图）
+curl "http://localhost:5080/img/images/photo.jpg"
+```
+
+**在 HTML 中使用：**
+
+```html
+<!-- 响应式缩略图，自动转 WebP -->
+<img src="/img/images/banner.jpg?w=800&fmt=webp&q=80" alt="banner">
+
+<!-- 头像正方形裁切 -->
+<img src="/img/avatars/user.jpg?w=100&h=100&fit=cover" alt="avatar">
+
+<!-- 原图 -->
+<img src="/img/images/full-quality.png" alt="original">
+```
+
+### 响应头说明
+
+| 响应头 | 示例值 | 说明 |
+|--------|--------|------|
+| `X-Vips` | `passthrough` | 无参数直接透传 |
+| `X-Vips` | `processed` | 经过 libvips 处理 |
+| `X-Vips-Size` | `200x150` | 输出图片的实际尺寸 |
+| `Content-Type` | `image/webp` | 输出格式的 MIME 类型 |
+| `Cache-Control` | `public, max-age=86400` | 处理后图片缓存 24 小时 |
+
+**不可用时的降级：**
+
+如果 lua-vips 未安装，访问带处理参数的 `/img/` 路径会返回 `503`，并附带文本说明，不会导致 nginx 崩溃。
+
+---
+
 ## Wake-on-LAN（网络唤醒）
 
 `lib/wol.lua` 提供通过 HTTP 接口向局域网设备发送 Magic Packet 的能力，适合用于远程开机场景。
@@ -539,6 +743,61 @@ docker load < dort.tar.gz
 
 ---
 
+## 测试
+
+项目提供完整的 sanity 测试脚本，覆盖所有核心功能：
+
+```bash
+# 确保容器已启动
+docker compose up -d
+
+# 运行测试（默认目标 http://localhost:5080）
+bash test/sanity_test.sh
+
+# 指定目标地址
+bash test/sanity_test.sh http://your-host:5080
+```
+
+**测试覆盖范围（49 个用例）：**
+
+| 测试组 | 用例数 | 覆盖内容 |
+|--------|--------|---------|
+| 1. Core Service Health | 3 | 健康检查 `/noc.gif`、Mock 接口 |
+| 2. WebDAV Basic | 3 | PROPFIND 目录、XML 响应格式 |
+| 3. ZipFS HTTP | 18 | 目录列表、各类文件读取、MIME 类型、404 场景 |
+| 4. Vips 图片处理 | 20 | 缩放/裁切/格式转换/各 fit 模式/404 |
+| 5. WebDAV ZIP 透明接管 | 5 | PROPFIND 拦截、Depth 控制、GET 重定向 |
+
+**输出示例：**
+
+```
+=== docker-openresty-tool Sanity Tests ===
+    Target: http://localhost:5080
+
+▶ 1. Core Service Health
+  ✓ Health check /noc.gif (HTTP 200)
+  ✓ Mock endpoint /mock/test (HTTP 200)
+  ...
+
+▶ 4. Vips — Dynamic Image Processing
+  ✓ Vips resize cover (w=100,h=100,fit=cover) (HTTP 200)
+  ✓ Vips cover output 100x100 (header 'X-Vips-Size: 100x100')
+  ✓ Vips format conversion to WebP (HTTP 200)
+  ...
+
+═══════════════════════════════════════
+  Results: 49 passed  0 failed  0 skipped  / 49 total
+═══════════════════════════════════════
+```
+
+**测试数据：**
+
+测试脚本会自动检查 `data/` 目录，如果测试 PNG 图片或 `test_assets.zip` 不存在，会自动生成：
+- `data/images/` — 4 张纯色 PNG 测试图（不同分辨率和颜色）
+- `data/archives/test_assets.zip` — 包含 HTML、CSS、JSON、Markdown 和图片的测试 ZIP 包
+
+---
+
 ## 调试与运维
 
 ```bash
@@ -610,6 +869,24 @@ include default_app/main.conf;
 ```yaml
 entrypoint: ["sh", "/usr/local/openresty/nginx/conf/entrypoint.sh"]
 ```
+
+### Fix 4: ZipFS `parse_zip_uri` 中 Lua 字符串查找模式错误
+
+**问题**：`lib/zipfs.lua` 中使用 `rest:find("%.zip", 1, true)` 查找 `.zip` 扩展名。  
+`true` 参数表示**纯文本（plain）搜索**，此时搜索的字面字符串是 `%.zip`（5个字符），而不是 `.zip`（4个字符），导致任何路径都无法匹配，`parse_zip_uri` 始终返回 `nil`，所有 ZIP 请求均 404。
+
+**修复**：纯文本模式下应使用字面字符串 `".zip"` 而非 Lua 模式转义写法 `"%.zip"`：
+
+```lua
+-- 修复前（错误：plain 模式下搜索的是 "%.zip" 这 5 个字符）
+local zip_end = rest:find("%.zip", 1, true)
+
+-- 修复后（plain 模式下搜索 ".zip" 这 4 个字符）
+local zip_end = rest:find(".zip", 1, true)
+```
+
+> **说明**：`str:find(pattern, init, plain)` 第 4 个参数为 `true` 时，`pattern` 被作为普通字符串处理，  
+> Lua 正则转义字符（如 `%`）不再有特殊含义。`"%.zip"` 在 plain 模式下就是字面量 5 个字符。
 
 ---
 

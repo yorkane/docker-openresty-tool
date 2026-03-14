@@ -67,7 +67,7 @@ ARG RESTY_LUAJIT_OPTIONS="--with-luajit-xcflags='-DLUAJIT_NUMMODE=2 -DLUAJIT_ENA
 ARG RESTY_PCRE_OPTIONS="--with-pcre-jit"
 
 ARG RESTY_ADD_PACKAGE_BUILDDEPS="lua5.1-dev gcc libc-dev make"
-ARG RESTY_ADD_PACKAGE_RUNDEPS="luarocks5.1 tree curl tzdata libstdc++ gnu-libiconv zziplib-dev libarchive-tools envsubst"
+ARG RESTY_ADD_PACKAGE_RUNDEPS="luarocks5.1 tree curl tzdata libstdc++ gnu-libiconv zziplib-dev libarchive-tools envsubst vips vips-dev"
 ARG RESTY_EVAL_PRE_CONFIGURE="mv /usr/bin/luarocks-5.1  /usr/bin/luarocks && \
 export LUAJIT_DIR=/usr/local/openresty/luajit  && \
 luarocks install luasocket && \

@@ -1,0 +1,286 @@
+-- lib/zipfs.lua
+-- ZIP Virtual Filesystem for OpenResty
+--
+-- HTTP access:
+--   GET /zip/<path/to/archive.zip>/          → directory listing
+--   GET /zip/<path/to/archive.zip>/<entry>   → serve file from ZIP
+--
+-- WebDAV integration (transparent, called from main.conf rewrite_by_lua_block):
+--   PROPFIND on any *.zip path → returns DAV XML for entries inside ZIP
+--   GET/HEAD on *.zip path     → redirects to /zip/ virtual FS
+--
+-- Requires: luazip (already installed in orabase:1)
+
+local _M = {}
+
+-- ──────────────────────────────────────────────────────────
+-- MIME types
+-- ──────────────────────────────────────────────────────────
+local mime_map = {
+    html="text/html; charset=utf-8", htm="text/html; charset=utf-8",
+    css="text/css", js="application/javascript", json="application/json",
+    xml="application/xml", txt="text/plain; charset=utf-8", md="text/plain; charset=utf-8",
+    jpg="image/jpeg", jpeg="image/jpeg", png="image/png", gif="image/gif",
+    webp="image/webp", avif="image/avif", svg="image/svg+xml", ico="image/x-icon",
+    pdf="application/pdf", zip="application/zip", gz="application/gzip",
+    mp4="video/mp4", mp3="audio/mpeg",
+    woff="font/woff", woff2="font/woff2",
+}
+
+local function mime_of(filename)
+    local ext = (filename or ""):match("%.([^./]+)$") or ""
+    return mime_map[ext:lower()] or "application/octet-stream"
+end
+
+local function html_escape(s)
+    return (tostring(s or "")):gsub("[&<>\"']", {
+        ["&"]="&amp;", ["<"]="&lt;", [">"]="&gt;", ['"']="&quot;", ["'"]="&#39;",
+    })
+end
+
+local function human_size(n)
+    n = n or 0
+    if n < 1024 then return n.." B"
+    elseif n < 1048576 then return string.format("%.1f KB", n/1024)
+    else return string.format("%.1f MB", n/1048576) end
+end
+
+local function file_exists(path)
+    local f = io.open(path, "rb")
+    if f then f:close() return true end
+    return false
+end
+
+-- ──────────────────────────────────────────────────────────
+-- ZIP helpers
+-- ──────────────────────────────────────────────────────────
+
+-- Collect all entries from zip into a flat list using luazip iterator API
+-- Each entry: {name=string, size=int, is_dir=bool}
+local function collect_entries(zip_handle)
+    local entries = {}
+    for e in zip_handle:files() do
+        local name = e.filename or ""
+        entries[#entries+1] = {
+            name    = name,
+            size    = e.uncompressed_size or 0,
+            is_dir  = name:sub(-1) == "/"
+        }
+    end
+    return entries
+end
+
+-- List direct children of a directory prefix inside a ZIP
+-- prefix: "" for root, "subdir/" for subdirectory
+-- Returns: dirs[], files[] (each with .name, .size)
+local function list_dir(entries, prefix)
+    local dirs, files, seen = {}, {}, {}
+    for _, e in ipairs(entries) do
+        local name = e.name
+        -- must start with prefix
+        if name:sub(1, #prefix) == prefix then
+            local rel = name:sub(#prefix + 1)
+            if rel ~= "" then
+                local slash = rel:find("/")
+                if slash then
+                    -- sub-directory
+                    local dname = rel:sub(1, slash - 1)
+                    if dname ~= "" and not seen[dname] then
+                        seen[dname] = true
+                        dirs[#dirs+1] = dname
+                    end
+                else
+                    -- direct file
+                    files[#files+1] = {name=rel, size=e.size}
+                end
+            end
+        end
+    end
+    table.sort(dirs)
+    table.sort(files, function(a,b) return a.name < b.name end)
+    return dirs, files
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Parse URI: /zip/<zip_rel>/<inner>
+-- ──────────────────────────────────────────────────────────
+local function parse_zip_uri(uri)
+    local rest = uri:match("^/zip/(.*)$")
+    if not rest then return nil, nil end
+    local zip_end = rest:find(".zip", 1, true)
+    if not zip_end then return nil, nil end
+    zip_end = zip_end + 3
+    local zip_rel = rest:sub(1, zip_end)
+    local inner   = rest:sub(zip_end + 1):gsub("^/+", "")
+    return zip_rel, inner
+end
+
+-- ──────────────────────────────────────────────────────────
+-- HTML directory listing
+-- ──────────────────────────────────────────────────────────
+local function render_listing(zip_rel, inner, entries)
+    local prefix = (inner == "" and "" or (inner:gsub("/*$", "") .. "/"))
+    local dirs, files = list_dir(entries, prefix)
+    local title = "/" .. zip_rel .. "/" .. inner
+
+    local h = {
+        '<!DOCTYPE html><html><head><meta charset="utf-8">',
+        '<title>' .. html_escape(title) .. '</title>',
+        '<style>',
+        'body{font-family:monospace;padding:20px;background:#1e1e1e;color:#d4d4d4;max-width:900px}',
+        'h1{font-size:1.1em;color:#569cd6;word-break:break-all}',
+        'table{border-collapse:collapse;width:100%}',
+        'tr:hover td{background:#2a2a2a}',
+        'td,th{padding:5px 14px;text-align:left;border-bottom:1px solid #333}',
+        'th{color:#9cdcfe;background:#252526}',
+        'a{color:#4ec9b0;text-decoration:none}a:hover{text-decoration:underline}',
+        '.dir{color:#dcdcaa}.sz{text-align:right;color:#808080;width:80px}',
+        '</style></head><body>',
+        '<h1>&#128230;&nbsp;' .. html_escape(title) .. '</h1>',
+        '<table><tr><th>Name</th><th class="sz">Size</th></tr>',
+    }
+
+    -- Parent link
+    if inner ~= "" then
+        local stripped = inner:gsub("/*$", "")
+        local parent = stripped:match("^(.*)/[^/]+$") or ""
+        local parent_url = "/zip/" .. zip_rel .. (parent ~= "" and ("/" .. parent .. "/") or "/")
+        h[#h+1] = '<tr><td><a href="' .. html_escape(parent_url) .. '">&#8593; ..</a></td><td class="sz">—</td></tr>'
+    end
+
+    for _, d in ipairs(dirs) do
+        local href = "/zip/" .. zip_rel .. "/" .. prefix .. d .. "/"
+        h[#h+1] = '<tr><td class="dir"><a href="' .. html_escape(href) .. '">&#128193;&nbsp;' .. html_escape(d) .. '/</a></td><td class="sz">—</td></tr>'
+    end
+    for _, f in ipairs(files) do
+        local href = "/zip/" .. zip_rel .. "/" .. prefix .. f.name
+        h[#h+1] = '<tr><td><a href="' .. html_escape(href) .. '">' .. html_escape(f.name) .. '</a></td>'
+        h[#h+1] = '<td class="sz">' .. human_size(f.size) .. '</td></tr>'
+    end
+
+    h[#h+1] = '</table></body></html>'
+    return table.concat(h, "\n")
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Main HTTP handler  (location /zip/)
+-- ──────────────────────────────────────────────────────────
+function _M.handle(webdav_root)
+    local uri = ngx.var.uri
+
+    local zip_rel, inner = parse_zip_uri(uri)
+    if not zip_rel then return ngx.exit(ngx.HTTP_NOT_FOUND) end
+
+    local zip_path = webdav_root .. "/" .. zip_rel
+    if not file_exists(zip_path) then
+        ngx.log(ngx.WARN, "[zipfs] zip not found: ", zip_path)
+        return ngx.exit(ngx.HTTP_NOT_FOUND)
+    end
+
+    local ok, zf = pcall(require("zip").open, zip_path)
+    if not ok or not zf then
+        ngx.log(ngx.ERR, "[zipfs] cannot open: ", zip_path, " err=", tostring(zf))
+        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+    end
+
+    local entries = collect_entries(zf)
+
+    -- Directory listing
+    local is_dir = (inner == "" or inner:sub(-1) == "/")
+    if is_dir then
+        local body = render_listing(zip_rel, inner:gsub("/*$",""), entries)
+        zf:close()
+        ngx.header["Content-Type"] = "text/html; charset=utf-8"
+        ngx.header["X-ZipFS"] = "dir-listing"
+        return ngx.print(body)
+    end
+
+    -- File read
+    local ok2, fe = pcall(function() return zf:open(inner) end)
+    if not ok2 or not fe then
+        zf:close()
+        ngx.log(ngx.WARN, "[zipfs] entry not found: '", inner, "' in ", zip_path)
+        return ngx.exit(ngx.HTTP_NOT_FOUND)
+    end
+
+    local data = fe:read("*a")
+    fe:close()
+    zf:close()
+
+    if not data then return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR) end
+
+    ngx.header["Content-Type"]   = mime_of(inner)
+    ngx.header["Content-Length"] = #data
+    ngx.header["X-ZipFS"]        = "file"
+    ngx.header["Cache-Control"]  = "public, max-age=3600"
+    return ngx.print(data)
+end
+
+-- ──────────────────────────────────────────────────────────
+-- WebDAV PROPFIND handler
+-- Called from main.conf rewrite_by_lua_block for *.zip URIs
+-- ──────────────────────────────────────────────────────────
+function _M.webdav_propfind(webdav_root, uri, depth)
+    depth = depth or "1"
+    local rel = uri:gsub("^/+", "")
+
+    local zip_end = rel:find(".zip", 1, true)
+    if not zip_end then return nil end
+    zip_end = zip_end + 3
+
+    local zip_rel = rel:sub(1, zip_end)
+    local inner   = rel:sub(zip_end + 1):gsub("^/+", "")
+
+    local zip_path = webdav_root .. "/" .. zip_rel
+    if not file_exists(zip_path) then return nil end
+
+    local ok, zf = pcall(require("zip").open, zip_path)
+    if not ok or not zf then return nil end
+
+    local entries = collect_entries(zf)
+    zf:close()
+
+    local base_href = "/" .. zip_rel
+    local xml = { '<?xml version="1.0" encoding="utf-8"?>', '<D:multistatus xmlns:D="DAV:">' }
+
+    local function add_prop(href, is_coll, size, name)
+        xml[#xml+1] = '<D:response><D:href>' .. html_escape(href) .. '</D:href>'
+        xml[#xml+1] = '<D:propstat><D:prop>'
+        if is_coll then
+            xml[#xml+1] = '<D:resourcetype><D:collection/></D:resourcetype>'
+        else
+            xml[#xml+1] = '<D:resourcetype/>'
+            xml[#xml+1] = '<D:getcontentlength>' .. (size or 0) .. '</D:getcontentlength>'
+            xml[#xml+1] = '<D:getcontenttype>' .. mime_of(name or "") .. '</D:getcontenttype>'
+        end
+        xml[#xml+1] = '<D:displayname>' .. html_escape(name or "") .. '</D:displayname>'
+        xml[#xml+1] = '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>'
+    end
+
+    -- Self entry
+    local self_name = zip_rel:match("[^/]+$") or zip_rel
+    add_prop(base_href .. (inner ~= "" and ("/" .. inner) or ""), true, 0, self_name)
+
+    if depth ~= "0" then
+        local prefix = (inner == "" and "" or (inner:gsub("/*$","") .. "/"))
+        local dirs, files = list_dir(entries, prefix)
+        for _, d in ipairs(dirs) do
+            add_prop(base_href .. "/" .. prefix .. d .. "/", true, 0, d)
+        end
+        for _, f in ipairs(files) do
+            add_prop(base_href .. "/" .. prefix .. f.name, false, f.size, f.name)
+        end
+    end
+
+    xml[#xml+1] = '</D:multistatus>'
+    return table.concat(xml, "\n")
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Check if a URI points into a ZIP file
+-- ──────────────────────────────────────────────────────────
+function _M.is_zip_request(uri)
+    return (uri or ""):find(".zip", 1, true) ~= nil
+end
+
+return _M
