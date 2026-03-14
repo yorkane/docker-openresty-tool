@@ -196,48 +196,45 @@ local JS = [[
 function _M.filter()
     local ct = ngx.header["Content-Type"] or ""
     if ct:find("text/html", 1, true) then
-        -- Must clear Content-Length so nginx doesn't truncate the injected body
+        -- Must clear Content-Length, otherwise nginx truncates the injected body
         ngx.header["Content-Length"] = nil
-        -- Store flag for body phase
         ngx.ctx.or_preview_inject = true
     end
 end
 
--- body_filter phase: append script before </body>
--- nginx may deliver HTML in multiple chunks; we buffer and inject at eof.
+-- body_filter phase: buffer ALL chunks, inject at eof=true.
+-- We never emit partial chunks so we avoid split-chunk </body> problems.
 function _M.body()
     if not ngx.ctx.or_preview_inject then return end
-    local chunk = ngx.arg[1]
+
+    local chunk = ngx.arg[1] or ""
     local eof   = ngx.arg[2]
-    if not chunk then chunk = "" end
 
-    -- Accumulate chunks until we see </body> or reach eof
-    ngx.ctx.or_preview_buf = (ngx.ctx.or_preview_buf or "") .. chunk
-
-    if not eof then
-        -- Try early injection if </body> already in buffer
-        local buf = ngx.ctx.or_preview_buf
-        local injected, n = buf:gsub("</[Bb][Oo][Dd][Yy]>", JS .. "</body>", 1)
-        if n > 0 then
-            ngx.arg[1] = injected
-            ngx.ctx.or_preview_buf = nil
-            ngx.ctx.or_preview_inject = false
-        else
-            ngx.arg[1] = ""  -- hold back, flush at eof
-        end
-        return
+    -- Always buffer; suppress output until we are ready
+    if chunk ~= "" then
+        ngx.ctx.or_preview_buf = (ngx.ctx.or_preview_buf or "") .. chunk
+        ngx.arg[1] = ""   -- hold back this chunk
     end
 
-    -- eof=true: flush everything
+    if not eof then return end
+
+    -- eof=true: we have the complete HTML, inject and flush
+    ngx.ctx.or_preview_inject = false
     local buf = ngx.ctx.or_preview_buf or ""
     ngx.ctx.or_preview_buf = nil
-    ngx.ctx.or_preview_inject = false
 
-    local injected, n = buf:gsub("</[Bb][Oo][Dd][Yy]>", JS .. "</body>", 1)
-    if n > 0 then
-        ngx.arg[1] = injected
+    -- IMPORTANT: use a function replacement to avoid Lua gsub treating
+    -- '%' in the replacement string as a special escape (e.g. %items → items).
+    local injected = false
+    local result = buf:gsub("</[Bb][Oo][Dd][Yy]>", function()
+        injected = true
+        return JS .. "</body>"
+    end, 1)
+
+    if injected then
+        ngx.arg[1] = result
     else
-        -- No </body> found (e.g. plain text masquerading as html), just append
+        -- No </body> tag found; append script at the very end
         ngx.arg[1] = buf .. JS
     end
 end
