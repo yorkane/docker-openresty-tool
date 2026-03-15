@@ -89,7 +89,7 @@ luarocks install lua-resty-http && luarocks install lua-resty-redis-connector &&
 	wget 'https://raw.githubusercontent.com/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua' && \
 	wget 'https://raw.githubusercontent.com/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua'  && \
 	wget 'https://raw.githubusercontent.com/openresty/lua-resty-shell/master/lib/resty/shell.lua' && \
-	wget 'https://raw.githubusercontent.com/yorkane/lua-resty-ctxvar/main/lib/resty/ctxvar.lua' && \
+	cp /tmp/lua-resty-ctxvar/ctxvar.lua /usr/local/share/lua/5.1/resty/ && \
     cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*main/lib/* /usr/local/share/lua/5.1/ &&\
     cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/openresty/lua-resty-lrucache/archive/refs/heads/master.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
     cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/openresty/lua-resty-string/archive/refs/heads/master.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
@@ -129,6 +129,9 @@ LABEL resty_eval_post_download_pre_configure="${RESTY_EVAL_POST_DOWNLOAD_PRE_CON
 LABEL resty_eval_post_make="${RESTY_EVAL_POST_MAKE}"
 LABEL resty_luajit_options="${RESTY_LUAJIT_OPTIONS}"
 LABEL resty_pcre_options="${RESTY_PCRE_OPTIONS}"
+
+# Copy local lua-resty-ctxvar to image
+COPY nginx/lua/resty/ctxvar.lua /tmp/lua-resty-ctxvar/
 
 RUN apk add --no-cache --virtual .build-deps \
         build-base \
