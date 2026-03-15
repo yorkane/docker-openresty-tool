@@ -41,8 +41,9 @@ RUN set -eux \
         zziplib-dev \
         vips \
     \
-    # Build deps only needed for lua-vips compilation
+    # Build deps only needed for lua C extension compilation
     && apk add --no-cache --virtual .build-deps \
+        build-base \
         vips-dev \
         git \
     \
@@ -56,8 +57,9 @@ RUN set -eux \
     && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
     && luarocks install lua-vips \
     \
-    # Download raw Lua files
-    && cd /usr/local/share/lua/5.1/ \
+    # Download raw Lua files (into luarocks tree, consistent with luarocks install)
+    && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
+    && cd "${LUA_SHARE}" \
     && wget -q 'https://raw.githubusercontent.com/semyon422/luajit-iconv/master/init.lua' -O libiconv.lua \
     && wget -q 'https://raw.githubusercontent.com/spacewander/luafilesystem/master/lfs_ffi.lua' \
     && mkdir -p resty && cd resty \
@@ -68,8 +70,8 @@ RUN set -eux \
     # Download lua-resty-klib (yorkane's custom lib)
     && cd /tmp && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- 'https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz' \
-        | tar xz -C _tmp_ --strip-components=2 --wildcards '*/lib/*' \
-    && cp -r _tmp_/* /usr/local/share/lua/5.1/ \
+        | tar xz -C _tmp_ \
+    && find _tmp_ -type d -name lib -exec sh -c 'cp -r "$1"/. "${LUA_SHARE}/"' _ {} \; \
     \
     # Cleanup
     && apk del .build-deps \
