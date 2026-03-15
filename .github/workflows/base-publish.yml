@@ -20,6 +20,9 @@ env:
 jobs:
   build-base:
     runs-on: ubuntu-latest
+    # Building OpenResty from source takes ~20-30 min on amd64;
+    # arm64 via QEMU is prohibitively slow, so we build amd64-only here.
+    timeout-minutes: 90
     permissions:
       contents: read
 
@@ -61,7 +64,7 @@ jobs:
         with:
           context: .
           file: ./base.Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -11,10 +11,15 @@ WORKDIR /usr/local/openresty/nginx
 ENV TZ=Asia/Shanghai
 ARG NGINX_DAV_EXT_VER="4.0.1"
 ARG NGINX_FANCYINDEX_VER="0.5.2"
+# USE_CN_MIRROR=1 to switch to USTC mirror (useful for local builds in China).
+# Leave empty (default) for CI / international environments.
+ARG USE_CN_MIRROR=""
 RUN ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo Asia/Shanghai > /etc/timezone &&\
 	echo 'ls -lta "$@"' > /usr/bin/ll && chmod 755 /usr/bin/ll &&\
 	mkdir -p /data/cache/stale_cache/ && chmod a+rwx /data/ -R &&\
-	sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories
+	if [ -n "${USE_CN_MIRROR}" ]; then \
+	  sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories; \
+	fi
 # Custom preconfig End
 
 # Docker Build Arguments
@@ -68,16 +73,14 @@ ARG RESTY_PCRE_OPTIONS="--with-pcre-jit"
 
 ARG RESTY_ADD_PACKAGE_BUILDDEPS="lua5.1-dev gcc libc-dev make"
 ARG RESTY_ADD_PACKAGE_RUNDEPS="luarocks5.1 tree curl tzdata libstdc++ gnu-libiconv zziplib-dev libarchive-tools envsubst vips vips-dev"
-ARG RESTY_EVAL_PRE_CONFIGURE="mv /usr/bin/luarocks-5.1  /usr/bin/luarocks && \
-export LUAJIT_DIR=/usr/local/openresty/luajit  && \
-luarocks install luasocket && \
-luarocks install luazip && \
-cd /tmp/ && wget https://github.com/mid1221213/nginx-dav-ext-module/archive/v${NGINX_DAV_EXT_VER}.tar.gz \
+ARG RESTY_EVAL_PRE_CONFIGURE="cd /tmp/ && wget https://github.com/mid1221213/nginx-dav-ext-module/archive/v${NGINX_DAV_EXT_VER}.tar.gz \
     -O /tmp/nginx-dav-ext-module-v${NGINX_DAV_EXT_VER}.tar.gz && \
   wget https://github.com/aperezdc/ngx-fancyindex/archive/v${NGINX_FANCYINDEX_VER}.tar.gz \
     -O /tmp/ngx-fancyindex-v${NGINX_FANCYINDEX_VER}.tar.gz && ls *.gz | xargs -n1 tar -xzf"
 ARG RESTY_EVAL_POST_DOWNLOAD_PRE_CONFIGURE=""
-ARG RESTY_EVAL_POST_MAKE="rm -rf /tmp/* && \
+ARG RESTY_EVAL_POST_MAKE="mv /usr/bin/luarocks-5.1 /usr/bin/luarocks && \
+export LUAJIT_DIR=/usr/local/openresty/luajit && \
+luarocks install luasocket && luarocks install luazip && \
 luarocks install lua-resty-http && luarocks install lua-resty-redis-connector && luarocks install lua-resty-template && luarocks install lua-ffi-zlib &&\
     cd /usr/local/share/lua/5.1/ && mkdir resty -p && \
 	wget 'https://raw.githubusercontent.com/semyon422/luajit-iconv/master/init.lua' -O libiconv.lua && \
