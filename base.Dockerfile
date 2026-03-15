@@ -37,6 +37,13 @@ LABEL resty_version="${RESTY_VERSION}"
 LABEL resty_openssl_version="${RESTY_OPENSSL_VERSION}"
 LABEL resty_pcre_version="${RESTY_PCRE_VERSION}"
 
+# Re-declare all ARG here for use in RUN commands (ARG before FROM has different scope)
+ARG RESTY_VERSION="1.29.2.1"
+ARG RESTY_OPENSSL_VERSION="3.5.0"
+ARG RESTY_PCRE_VERSION="10.47"
+ARG NGINX_DAV_EXT_VER="4.0.1"
+ARG NGINX_FANCYINDEX_VER="0.5.2"
+
 # Export as ENV to ensure availability in RUN commands
 ENV NGINX_DAV_EXT_VER=${NGINX_DAV_EXT_VER}
 ENV NGINX_FANCYINDEX_VER=${NGINX_FANCYINDEX_VER}
