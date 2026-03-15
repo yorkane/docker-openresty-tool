@@ -1,4 +1,7 @@
-FROM orabase:1
+# In CI, pass --build-arg BASE_IMAGE=yorkane/openresty-base:latest
+# For local builds, the default is the locally-built orabase:1
+ARG BASE_IMAGE=orabase:1
+FROM ${BASE_IMAGE}
 WORKDIR /usr/local/openresty/nginx
 COPY ./nginx/ /usr/local/openresty/nginx
 
