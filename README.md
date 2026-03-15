@@ -3,8 +3,10 @@
 > 一个功能完备、开箱即用的 OpenResty Docker 工具镜像，集成自动 SSL（ACME/Let's Encrypt）、WebDAV、Wake-on-LAN、Mock 接口、HTTP 基础认证等扩展能力，专为生产与开发双场景设计。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![OpenResty](https://img.shields.io/badge/OpenResty-1.25.3.2-green)](https://openresty.org)
-[![Alpine](https://img.shields.io/badge/Alpine-3.20-lightgrey)](https://alpinelinux.org)
+[![OpenResty](https://img.shields.io/badge/OpenResty-1.29.2.1-green)](https://openresty.org)
+[![Alpine](https://img.shields.io/badge/Alpine-3.22-lightgrey)](https://alpinelinux.org)
+[![Base Image](https://img.shields.io/badge/Base-openresty--base-blue)](https://github.com/yorkane/openresty-base)
+[![Docker Image Size](https://img.shields.io/badge/Image%20Size-~113MB-orange)](https://hub.docker.com/r/yorkane/docker-openresty-tool)
 
 ---
 
@@ -69,37 +71,46 @@
 ## 架构概览
 
 ```
-┌─────────────────────────────────────────────────────┐
-│              docker-openresty-tool:latest            │
-│                                                      │
-│  ┌──────────────────────────────────────────────┐   │
-│  │               orabase:1 (基础镜像)            │   │
-│  │  Alpine 3.20 + OpenResty 1.25.3.2            │   │
-│  │  + OpenSSL 1.1.1w + PCRE 8.45               │   │
-│  │  + WebDAV Ext + FancyIndex                   │   │
-│  │  + LuaRocks 库 + 自定义 Lua 库               │   │
-│  └──────────────────────────────────────────────┘   │
-│                                                      │
-│  工具层（nginx/ 挂载或内置）                          │
-│  ┌─────────┐  ┌──────────┐  ┌──────────────────┐   │
-│  │ conf/   │  │  lua/    │  │  bins/ / site/   │   │
-│  │ nginx配置│  │ Lua 脚本 │  │  辅助脚本/静态文件│   │
-│  └─────────┘  └──────────┘  └──────────────────┘   │
-│                                                      │
-│  entrypoint.sh → envsubst 渲染配置 → openresty 启动   │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│           yorkane/docker-openresty-tool:latest               │
+│                      (~113 MB 总计)                           │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │    ghcr.io/yorkane/openresty-base:latest (~77 MB)      │  │
+│  │  Alpine 3.22 + OpenResty 1.29.2.1                      │  │
+│  │  + OpenSSL 3.5.5 (源码编译) + PCRE2 10.47              │  │
+│  │  + nginx-dav-ext-module + ngx-fancyindex               │  │
+│  │  + LuaRocks 3.13 + luajit/include headers              │  │
+│  │  + wget (GNU)                                           │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  工具层 (~36 MB)                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
+│  │ apk 运行时包  │  │ LuaRocks 库  │  │  nginx/ 配置层   │   │
+│  │ vips         │  │ luasocket    │  │  conf/ lua/ bins/ │   │
+│  │ gnu-libiconv │  │ lua-vips     │  │  entrypoint.sh    │   │
+│  │ libarchive   │  │ lua-resty-*  │  │  Lua 脚本库       │   │
+│  │ zziplib-dev  │  │ luazip 等    │  │  自定义 resty 库  │   │
+│  └──────────────┘  └──────────────┘  └──────────────────┘   │
+│                                                              │
+│  entrypoint.sh → envsubst 渲染配置 → openresty 启动           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 镜像分层
 
-| 镜像 | Dockerfile | 说明 |
-|------|-----------|------|
-| `orabase:1` | `base.Dockerfile` | 基础层：Alpine + 编译 OpenResty 及所有依赖 |
-| `yorkane/docker-openresty-tool:latest` | `Dockerfile` | 工具层：在基础镜像上叠加 nginx/ 目录及运行时 Lua 库 |
+本项目采用**双仓库分层**架构，基础镜像与工具镜像独立维护：
 
-> **注意**：需先构建 `orabase:1`，再构建工具镜像。
+| 镜像 | 仓库 | 大小 | 说明 |
+|------|------|------|------|
+| `ghcr.io/yorkane/openresty-base:latest` | [yorkane/openresty-base](https://github.com/yorkane/openresty-base) | ~77 MB | 基础层：Alpine + 从源码编译 OpenResty 1.29.2.1 及所有扩展模块 |
+| `yorkane/docker-openresty-tool:latest` | 本仓库 | ~36 MB（增量） | 工具层：叠加 Lua 库、nginx 配置、应用脚本 |
+
+**总镜像大小约 113 MB**（历史版本自编译时约 1.48 GB，减少 **92%**）。
+
+> 工具镜像构建时 **FROM** `openresty-base`，无需本地编译 OpenResty，构建时间从 30+ 分钟缩短至约 **5 分钟**。
 
 ---
 
@@ -107,8 +118,7 @@
 
 ```
 docker-openresty-tool/
-├── base.Dockerfile          # 基础镜像：编译 OpenResty + Alpine 环境
-├── Dockerfile               # 工具镜像：叠加 nginx/ 配置与 Lua 库
+├── Dockerfile               # 工具镜像：FROM openresty-base，叠加 nginx/ 配置与 Lua 库
 ├── docker-compose.yml       # 快速启动编排文件
 ├── LICENSE                  # MIT 许可证
 ├── README.md
@@ -201,20 +211,13 @@ docker-openresty-tool/
 | `lua-resty-openssl` | OpenSSL FFI 绑定 |
 | `lua-resty-lrucache` | LRU 缓存（openresty 官方） |
 | `lua-resty-string` | 字符串工具（openresty 官方） |
+| `lua-resty-klib` | yorkane 自研通用工具库（构建时自动从 GitHub 拉取） |
 | `lua-resty-cookie` | Cookie 解析 |
 | `lua-resty-hmac` | HMAC 签名验证 |
 | `lua-resty-shell` | 非阻塞 Shell 执行 |
 | `lua-resty-ctxvar` | 请求上下文变量封装（内置） |
 | `luajit-iconv` | libiconv 字符编码转换 |
 | `lfs_ffi` | 文件系统操作（FFI） |
-
-> **注意**：`lua-resty-klib`（作者自研工具库）在本镜像中**未默认安装**，
-> 如需使用，请手动克隆并安装：
-> ```bash
-> # 进入容器后执行
-> cd /usr/local/openresty/lualib
-> git clone https://github.com/yorkane/lua-resty-klib.git klib
-> ```
 
 ---
 
@@ -820,54 +823,69 @@ local mylib = require('lib.mymodule')
 
 ## 从源码构建镜像
 
-> 提示：本项目已配置 GitHub Actions 自动化构建。推送到 main 分支后会自动构建并发布镜像到 Docker Hub：
-> - 基础镜像：`yorkane/openresty-base:latest`
-> - 工具镜像：`yorkane/docker-openresty-tool:latest`
+> 本项目已配置 GitHub Actions 自动化构建。推送到 main 分支后会自动构建并发布镜像：
+> - **基础镜像**（独立仓库）：`ghcr.io/yorkane/openresty-base:latest`，详见 [yorkane/openresty-base](https://github.com/yorkane/openresty-base)
+> - **工具镜像**（本仓库）：`yorkane/docker-openresty-tool:latest`
 >
 > 详见 [.github/workflows/](.github/workflows/) 目录。
 
-### 构建基础镜像
+### 构建基础镜像（可选）
 
-基础镜像负责完整编译 OpenResty，构建时间较长（约 10-20 分钟）：
+基础镜像由独立仓库维护，负责完整编译 OpenResty（含 OpenSSL、PCRE2 等），构建时间约 5-10 分钟：
 
 ```bash
-# 构建 orabase:1
-docker build -t orabase:1 -f base.Dockerfile .
+# 克隆基础镜像仓库
+git clone https://github.com/yorkane/openresty-base.git
+cd openresty-base
+
+# 构建（amd64）
+docker build --platform linux/amd64 -t ghcr.io/yorkane/openresty-base:latest .
+
+# 构建（多平台）
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/yorkane/openresty-base:latest .
 ```
 
-主要编译参数（可通过 `--build-arg` 覆盖）：
+基础镜像主要编译参数（可通过 `--build-arg` 覆盖）：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `RESTY_VERSION` | `1.25.3.2` | OpenResty 版本 |
-| `RESTY_OPENSSL_VERSION` | `1.1.1w` | OpenSSL 版本 |
-| `RESTY_PCRE_VERSION` | `8.45` | PCRE 版本 |
-| `RESTY_J` | `8` | 并行编译线程数 |
-| `RESTY_IMAGE_TAG` | `3.20` | Alpine 版本 |
-
-**自定义版本示例：**
-
-```bash
-docker build \
-  --build-arg RESTY_VERSION=1.25.3.2 \
-  --build-arg RESTY_J=4 \
-  -t orabase:1 -f base.Dockerfile .
-```
+| `RESTY_VERSION` | `1.29.2.1` | OpenResty 版本 |
+| `RESTY_OPENSSL_VERSION` | `3.5.5` | OpenSSL 版本（源码编译） |
+| `RESTY_PCRE_VERSION` | `10.47` | PCRE2 版本（源码编译） |
+| `RESTY_LUAROCKS_VERSION` | `3.13.0` | LuaRocks 版本 |
+| `RESTY_J` | `4` | 并行编译线程数 |
+| `RESTY_IMAGE_TAG` | `3.22` | Alpine 版本 |
 
 ### 构建工具镜像
 
 ```bash
-docker build -t yorkane/docker-openresty-tool:latest .
+# 使用官方基础镜像（推荐）
+docker build --platform linux/amd64 -t yorkane/docker-openresty-tool:latest .
+
+# 国内加速（切换 USTC 镜像源）
+docker build --platform linux/amd64 \
+  --build-arg USE_CN_MIRROR=1 \
+  -t yorkane/docker-openresty-tool:latest .
+
+# 指定特定版本的基础镜像
+docker build --platform linux/amd64 \
+  --build-arg BASE_IMAGE=ghcr.io/yorkane/openresty-base:sha-abc1234 \
+  -t yorkane/docker-openresty-tool:latest .
 ```
 
 **保存与导出（离线分发）：**
 
 ```bash
-# 保存镜像为 tar 包
-docker save yorkane/docker-openresty-tool:latest | gzip > dort.tar.gz
+# 保存为 xz 压缩包（压缩率更高）
+docker save yorkane/docker-openresty-tool:latest | xz -v -T4 > yot.tar.xz
 
 # 在目标机器上加载
-docker load < dort.tar.gz
+xz -d -k < yot.tar.xz | docker load
+
+# 或使用 gzip（兼容性更好）
+docker save yorkane/docker-openresty-tool:latest | gzip > yot.tar.gz
+docker load < yot.tar.gz
 ```
 
 ---
