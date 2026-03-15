@@ -18,9 +18,10 @@
   'use strict';
 
   /* ── Media type maps ── */
-  var IMG = { jpg:1,jpeg:1,png:1,gif:1,webp:1,avif:1,bmp:1,svg:1,tiff:1,tif:1 };
-  var VID = { mp4:1,webm:1,mkv:1,mov:1,avi:1,m4v:1,ogv:1,ts:1 };
-  var AUD = { mp3:1,ogg:1,wav:1,flac:1,aac:1,m4a:1,opus:1 };
+  var IMG = { jpg:1,jpeg:1,png:1,gif:1,webp:1,avif:1,bmp:1,svg:1,tiff:1,tif:1,
+              jfif:1,jp2:1,jpx:1,heif:1,heic:1,jxl:1,ico:1,cur:1,rgb:1,pgm:1,ppm:1,pbm:1,pnm:1 };
+  var VID = { mp4:1,webm:1,mkv:1,mov:1,avi:1,m4v:1,ogv:1,ts:1,av1:1,wmv:1,flv:1,webm:1 };
+  var AUD = { mp3:1,ogg:1,wav:1,flac:1,aac:1,m4a:1,opus:1,wma:1,aiff:1 };
 
   /* ── Helpers ── */
   function ext(h) {
@@ -75,7 +76,11 @@
       '#__or_tb button{background:none;border:none;cursor:pointer;font-size:16px;' +
         'padding:3px 7px;color:#fff;line-height:1.3;border-radius:4px;' +
         'white-space:nowrap;flex-shrink:0;}' +
-      '#__or_tb button.active{background:rgba(255,255,255,.25);}';
+      '#__or_tb button.active{background:rgba(255,255,255,.25);}' +
+      /* Focus box: high contrast for both dark and light backgrounds */
+      '#__or_focus{border:3px solid #ff9500;box-shadow:0 0 10px rgba(255,149,0,0.7),inset 0 0 10px rgba(255,149,0,0.4);}' +
+      /* Larger preview eye icon with better visibility */
+      '.__or_preview_btn{font-size:22px !important;padding:2px 6px !important;opacity:0.9 !important;text-shadow:1px 1px 2px rgba(0,0,0,0.8),-1px -1px 2px rgba(255,255,255,0.3) !important;}';
     document.head.appendChild(s);
   })();
 
@@ -126,28 +131,49 @@
   ov.style.display = 'none';
   document.body.appendChild(ov);
 
+  /* Focus box element for non-preview navigation */
+  var focusBox = document.createElement('div');
+  focusBox.id = '__or_focus';
+  focusBox.style.cssText =
+    'display:none;position:absolute;pointer-events:none;z-index:100;' +
+    'border:3px solid #ff9500;box-shadow:0 0 8px rgba(255,149,0,0.6),inset 0 0 8px rgba(255,149,0,0.3);' +
+    'border-radius:4px;transition:top 0.12s,left 0.12s;';
+  document.body.appendChild(focusBox);
+
   /* ── State ── */
   var items = []; // [{href, name}]
   var cur = 0;
+
+  /* Focus box state (non-preview mode) */
+  var focusIdx = -1;
+  var focusEl = null;
+  var isMuted = false;
+  var currentMediaEl = null; // current video/audio element for volume control
 
   /* ────────────────────────────────────────────
      Scan page and inject 👁 buttons
   ──────────────────────────────────────────── */
   function init() {
-    document.querySelectorAll('a[href]').forEach(function (a) {
+    document.querySelectorAll('a[href]').forEach(function (a, aIdx) {
       var href = a.getAttribute('href');
       if (!href || href.startsWith('?') || href === '../') return;
       var abs = new URL(href, location.href).pathname;
+
+      // Mark all links with index for focus box
+      a.dataset.listIdx = String(aIdx);
+
       if (!isMedia(abs)) return;
       var idx = items.length;
       items.push({ href: abs, name: decodeURIComponent(abs.split('/').pop()) });
       var btn = document.createElement('button');
       btn.textContent = '👁';
-      btn.title = '预览';
+      btn.title = '预览 (Enter)';
       btn.dataset.idx = String(idx);
+      btn.className = '__or_preview_btn';
       btn.style.cssText =
-        'background:none;border:none;cursor:pointer;font-size:15px;' +
-        'padding:0 4px;line-height:1;vertical-align:middle;opacity:.75;';
+        'background:none;border:none;cursor:pointer;font-size:22px;' +
+        'padding:2px 6px;line-height:1;vertical-align:middle;opacity:.9;' +
+        'text-shadow:1px 1px 2px rgba(0,0,0,0.8),-1px -1px 2px rgba(255,255,255,0.3);';
       btn.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -155,6 +181,11 @@
       });
       a.parentNode.insertBefore(btn, a);
     });
+    // Auto-show focus box on first file after init
+    if (items.length > 0) {
+      focusIdx = 0;
+      setTimeout(showFocusBox, 100);
+    }
   }
 
   /* ────────────────────────────────────────────
@@ -165,6 +196,7 @@
     render();
     ov.style.display = 'block';
     document.body.style.overflow = 'hidden';
+    hideFocusBox(); // Hide focus box when preview opens
     preloadAround(cur);
   }
 
@@ -172,6 +204,7 @@
     ov.style.display = 'none';
     document.body.style.overflow = '';
     mediaEl.innerHTML = '';
+    currentMediaEl = null;
   }
 
   /* ────────────────────────────────────────────
@@ -302,6 +335,7 @@
     vid.src = item.href;
     vid.controls = true;
     vid.autoplay = true;
+    currentMediaEl = vid;
     vid.addEventListener('loadedmetadata', function () { applyVidMode(vid); });
     applyVidMode(vid); // initial sizing before metadata
     mediaEl.appendChild(vid);
@@ -321,6 +355,7 @@
     aud.src = item.href;
     aud.controls = true;
     aud.autoplay = true;
+    currentMediaEl = aud;
     aud.style.width = '320px';
     wrap.appendChild(aud);
     mediaEl.appendChild(wrap);
@@ -384,6 +419,106 @@
   ──────────────────────────────────────────── */
   function setView(m) { viewMode = m; render(); }
 
+  /* ── Volume control ── */
+  function adjustVolume(delta) {
+    if (!currentMediaEl) return;
+    var v = Math.min(1, Math.max(0, (currentMediaEl.volume || 0) + delta));
+    currentMediaEl.volume = v;
+    currentMediaEl.muted = false;
+    isMuted = false;
+  }
+
+  function toggleMute() {
+    if (!currentMediaEl) return;
+    isMuted = !isMuted;
+    currentMediaEl.muted = isMuted;
+  }
+
+  /* ── Focus box functions ── */
+  function getAllLinks() {
+    return Array.from(document.querySelectorAll('a[href]')).filter(function(a) {
+      var href = a.getAttribute('href');
+      return href && !href.startsWith('?') && href !== '../';
+    });
+  }
+
+  function showFocusBox() {
+    var links = getAllLinks();
+    if (links.length === 0) return;
+    focusIdx = Math.max(0, focusIdx);
+    if (focusIdx >= links.length) focusIdx = 0;
+    updateFocusBox(links[focusIdx]);
+    focusBox.style.display = 'block';
+  }
+
+  function updateFocusBox(linkEl) {
+    if (!linkEl) return;
+    var rect = linkEl.getBoundingClientRect();
+    focusBox.style.width = (rect.width + 4) + 'px';
+    focusBox.style.height = (rect.height + 4) + 'px';
+    focusBox.style.top = (rect.top - 2) + 'px';
+    focusBox.style.left = (rect.left - 2) + 'px';
+  }
+
+  function hideFocusBox() {
+    focusBox.style.display = 'none';
+    focusIdx = -1;
+  }
+
+  function moveFocus(delta) {
+    var links = getAllLinks();
+    if (links.length === 0) return;
+    focusIdx = (focusIdx + delta + links.length) % links.length;
+    var link = links[focusIdx];
+    updateFocusBox(link);
+    link.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function activateFocus() {
+    var links = getAllLinks();
+    if (links.length === 0 || focusIdx < 0 || focusIdx >= links.length) return;
+    var link = links[focusIdx];
+    var href = link.getAttribute('href');
+    if (!href || href.startsWith('?')) return;
+
+    // Check if it's a directory (ends with /) or navigable
+    if (href.endsWith('/')) {
+      // Directory navigate to it
+      window.location.href = href;
+    } else if (isMedia(new URL(href, location.href).pathname)) {
+      // Media file - open preview
+      var idx = items.findIndex(function(item) {
+        return item.href === new URL(href, location.href).pathname;
+      });
+      if (idx >= 0) {
+        openAt(idx);
+      } else {
+        // Not in items list, navigate to it directly
+        window.location.href = href;
+      }
+    } else {
+      // Other file - navigate normally
+      window.location.href = href;
+    }
+  }
+
+  function goBack() {
+    // Check for parent directory link
+    var parentLink = document.querySelector('a[href="../"], a[href="?dir=%2F"]');
+    if (parentLink) {
+      window.location.href = parentLink.getAttribute('href');
+    } else if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      // Fallback: try to go to parent path
+      var path = location.pathname;
+      var lastSlash = path.lastIndexOf('/', path.length - 2);
+      if (lastSlash > 0) {
+        location.href = path.substring(0, lastSlash + 1) || '/';
+      }
+    }
+  }
+
   /* ────────────────────────────────────────────
      Wire events
   ──────────────────────────────────────────── */
@@ -407,15 +542,70 @@
   ov.addEventListener('click', function (e) { if (e.target === ov) closeOv(); });
 
   document.addEventListener('keydown', function (e) {
-    if (ov.style.display === 'none') return;
-    switch (e.key) {
-      case 'Escape':                      closeOv();        break;
-      case 'ArrowUp':   case 'ArrowLeft': openAt(cur - 1);  break;
-      case 'ArrowDown': case 'ArrowRight':openAt(cur + 1);  break;
-      case 'Delete':                      doDelete();       break;
-      case 'f': case 'F':                 setView('fit');   break;
-      case 'o': case 'O':                 setView('orig');  break;
-      case 'r': case 'R':                 setView('rotate');break;
+    var inPreview = ov.style.display !== 'none';
+
+    if (inPreview) {
+      // Preview mode keyboard controls
+      switch (e.key) {
+        case 'Escape':
+          closeOv();
+          showFocusBox(); // Return to focus mode
+          break;
+        case 'ArrowUp':
+          openAt(cur - 1);
+          break;
+        case 'ArrowDown':
+          openAt(cur + 1);
+          break;
+        case 'ArrowLeft':
+          if (currentMediaEl) {
+            adjustVolume(-0.1);
+          }
+          break;
+        case 'ArrowRight':
+          if (currentMediaEl) {
+            adjustVolume(0.1);
+          }
+          break;
+        case 'Delete':
+          doDelete();
+          break;
+        case 'f': case 'F':
+          setView('fit');
+          break;
+        case 'o': case 'O':
+          setView('orig');
+          break;
+        case 'r': case 'R':
+          setView('rotate');
+          break;
+        case 'm': case 'M':
+          toggleMute();
+          break;
+        case 'b': case 'B':
+          closeOv();
+          showFocusBox();
+          break;
+      }
+    } else {
+      // Non-preview mode: focus box navigation
+      switch (e.key) {
+        case 'ArrowUp':
+          e.preventDefault();
+          moveFocus(-1);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          moveFocus(1);
+          break;
+        case 'Enter':
+          e.preventDefault();
+          activateFocus();
+          break;
+        case 'b': case 'B':
+          goBack();
+          break;
+      }
     }
   });
 

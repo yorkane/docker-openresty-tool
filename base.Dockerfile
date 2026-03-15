@@ -59,6 +59,7 @@ RUN apk add --no-cache --virtual .build-deps \
         curl \
         gd-dev \
         geoip-dev \
+        libxml2-dev \
         libxslt-dev \
         linux-headers \
         make \
@@ -73,6 +74,7 @@ RUN apk add --no-cache --virtual .build-deps \
         gd \
         geoip \
         libgcc \
+        libxml2 \
         libxslt \
         zlib \
         luarocks5.1 \
