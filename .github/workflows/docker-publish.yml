@@ -1,21 +1,12 @@
-name: Build & Push Tool Image
+name: Build & Push Image
 
-# Trigger on every push to main (and any branch push for PR previews).
-# The base image (yorkane/openresty-base) is referenced from Docker Hub,
-# so this workflow only needs to build the top-level Dockerfile.
 on:
   push:
     branches:
       - main
-    # Optionally ignore-only docs so pure README edits don't trigger a build:
     paths-ignore:
       - '**.md'
       - 'LICENSE'
-      - 'api.md'
-
-  # Triggered automatically when the base image is rebuilt
-  repository_dispatch:
-    types: [base-image-updated]
 
   # Allow manual trigger from the GitHub Actions UI
   workflow_dispatch:
@@ -26,6 +17,8 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Building OpenResty + OpenSSL from source takes ~30-40 min on amd64
+    timeout-minutes: 90
     permissions:
       contents: read
 
@@ -56,28 +49,22 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            # Always tag :latest on main
             type=raw,value=latest,enable={{is_default_branch}}
-            # Short commit SHA tag, e.g. sha-a1b2c3d
             type=sha,prefix=sha-,format=short
-            # Semver tags when a vX.Y.Z Git tag is pushed
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
       # ── 6. Build and push ─────────────────────────────────────────────────
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          # Build for amd64; arm64 cross-compilation is too slow with QEMU
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Point to the published base image instead of the local orabase:1
-          build-args: |
-            BASE_IMAGE=yorkane/openresty-base:latest
           # Use GitHub Actions cache to speed up layer reuse
           cache-from: type=gha
           cache-to: type=gha,mode=max
