@@ -29,10 +29,6 @@ ARG RESTY_J="8"
 ARG NGINX_DAV_EXT_VER="4.0.1"
 ARG NGINX_FANCYINDEX_VER="0.5.2"
 
-# Export as ENV to ensure availability in RUN commands
-ENV NGINX_DAV_EXT_VER=${NGINX_DAV_EXT_VER}
-ENV NGINX_FANCYINDEX_VER=${NGINX_FANCYINDEX_VER}
-
 FROM ${RESTY_IMAGE_BASE}:${RESTY_IMAGE_TAG}
 
 # ===== Custom preconfig =====
@@ -40,6 +36,10 @@ LABEL maintainer="yorkane"
 LABEL resty_version="${RESTY_VERSION}"
 LABEL resty_openssl_version="${RESTY_OPENSSL_VERSION}"
 LABEL resty_pcre_version="${RESTY_PCRE_VERSION}"
+
+# Export as ENV to ensure availability in RUN commands
+ENV NGINX_DAV_EXT_VER=${NGINX_DAV_EXT_VER}
+ENV NGINX_FANCYINDEX_VER=${NGINX_FANCYINDEX_VER}
 
 WORKDIR /usr/local/openresty/nginx
 ENV TZ=Asia/Shanghai
