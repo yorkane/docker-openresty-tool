@@ -94,12 +94,12 @@ COPY nginx/lua/resty/ctxvar.lua /tmp/lua-resty-ctxvar/
 WORKDIR /tmp
 
 # Download nginx-dav-ext-module
-RUN wget -q https://github.com/mid1221213/nginx-dav-ext-module/archive/v${NGINX_DAV_EXT_VER}.tar.gz \
+RUN wget -qL https://github.com/mid1221213/nginx-dav-ext-module/archive/v${NGINX_DAV_EXT_VER}.tar.gz \
     -O nginx-dav-ext-module-v${NGINX_DAV_EXT_VER}.tar.gz && \
     tar xzf nginx-dav-ext-module-v${NGINX_DAV_EXT_VER}.tar.gz
 
 # Download ngx-fancyindex
-RUN wget -q https://github.com/aperezdc/ngx-fancyindex/archive/v${NGINX_FANCYINDEX_VER}.tar.gz \
+RUN wget -qL https://github.com/aperezdc/ngx-fancyindex/archive/v${NGINX_FANCYINDEX_VER}.tar.gz \
     -O ngx-fancyindex-v${NGINX_FANCYINDEX_VER}.tar.gz && \
     tar xzf ngx-fancyindex-v${NGINX_FANCYINDEX_VER}.tar.gz
 
