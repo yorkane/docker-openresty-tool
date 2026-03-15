@@ -17,8 +17,8 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # Building OpenResty + OpenSSL from source takes ~30-40 min on amd64
-    timeout-minutes: 90
+    # Now uses pre-built openresty-base, only installs Lua libs (~5-10 min)
+    timeout-minutes: 30
     permissions:
       contents: read
 
