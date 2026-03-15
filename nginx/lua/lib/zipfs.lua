@@ -288,6 +288,10 @@ end
 -- Serves ZIP content directly at the original URL (no redirect).
 -- Directory listing links will also use the same root URL prefix.
 -- Returns true if the request was handled, false otherwise.
+--
+-- IMPORTANT: When inner == "" the request is for the ZIP file itself
+-- (e.g. WebDAV client downloading /archive.zip). In that case we do NOT
+-- intercept — let nginx serve the raw ZIP bytes normally.
 -- ──────────────────────────────────────────────────────────
 function _M.handle_transparent(webdav_root)
     local uri = ngx.var.uri
@@ -296,11 +300,17 @@ function _M.handle_transparent(webdav_root)
     local zip_rel, inner = parse_zip_uri_with_prefix(uri, "")
     if not zip_rel then return false end
 
+    -- inner == "" means the client is requesting the ZIP file itself
+    -- (e.g. a WebDAV client doing GET /path/to/archive.zip).
+    -- Do NOT intercept: fall through to the normal nginx static file handler
+    -- so the raw ZIP binary is served (not an HTML directory listing).
+    if inner == "" then return false end
+
+    -- inner != "" → access to a path inside the archive; handle transparently.
     -- Derive url_prefix: the part of the URI before the zip filename
     -- e.g. uri = "/archives/book.cbz/ch1"  → zip_rel = "archives/book.cbz"
-    --            url_prefix = ""  (root-relative links start with "/")
     -- We want directory links to be like "/archives/book.cbz/subdir/"
-    -- so url_prefix is just "" and we prepend "/" when building hrefs.
+    -- so url_prefix is just "" and hrefs start with "/".
     serve_zip(webdav_root, zip_rel, inner, "")
     return true
 end
@@ -370,6 +380,16 @@ end
 -- ──────────────────────────────────────────────────────────
 function _M.is_zip_request(uri)
     return find_zip_ext(uri or "") ~= nil
+end
+
+-- ──────────────────────────────────────────────────────────
+-- Return the end-index (1-based, inclusive) of the zip extension
+-- boundary in the URI, or nil if no zip extension found.
+-- Used by callers that need to split URI into zip_rel + inner.
+-- e.g. "/foo/bar.zip/ch1" → 12  (end of ".zip")
+-- ──────────────────────────────────────────────────────────
+function _M.find_zip_boundary(uri)
+    return find_zip_ext(uri or "")
 end
 
 -- ──────────────────────────────────────────────────────────
