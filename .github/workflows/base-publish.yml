@@ -24,7 +24,8 @@ jobs:
     # arm64 via QEMU is prohibitively slow, so we build amd64-only here.
     timeout-minutes: 90
     permissions:
-      contents: read
+      contents: write
+      pages: none
 
     steps:
       # ── 1. Checkout ────────────────────────────────────────────────────────
