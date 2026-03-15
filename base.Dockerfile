@@ -23,7 +23,7 @@ ARG RESTY_PCRE_VERSION="10.47"
 ARG RESTY_PCRE_BUILD_OPTIONS="--enable-jit"
 
 # Parallel build
-ARG RESTY_J="8"
+ARG RESTY_J="1"
 
 # Custom modules
 ARG NGINX_DAV_EXT_VER="4.0.1"
@@ -43,10 +43,18 @@ ARG RESTY_OPENSSL_VERSION="3.5.0"
 ARG RESTY_OPENSSL_PATCH_VERSION="3.0.17"
 ARG RESTY_OPENSSL_URL_BASE="https://www.openssl.org/source"
 ARG RESTY_PCRE_VERSION="10.47"
-ARG RESTY_J="8"
+ARG RESTY_J="1"
 ARG USE_CN_MIRROR=""
 ARG NGINX_DAV_EXT_VER="4.0.1"
 ARG NGINX_FANCYINDEX_VER="0.5.2"
+
+# Use ENV to ensure variables are available in all RUN commands
+ENV RESTY_VERSION=${RESTY_VERSION}
+ENV RESTY_OPENSSL_VERSION=${RESTY_OPENSSL_VERSION}
+ENV RESTY_PCRE_VERSION=${RESTY_PCRE_VERSION}
+ENV RESTY_J=${RESTY_J}
+ENV NGINX_DAV_EXT_VER=${NGINX_DAV_EXT_VER}
+ENV NGINX_FANCYINDEX_VER=${NGINX_FANCYINDEX_VER}
 
 WORKDIR /usr/local/openresty/nginx
 ENV TZ=Asia/Shanghai
@@ -149,7 +157,7 @@ WORKDIR /tmp/openresty-${RESTY_VERSION}
 
 # Configure with custom modules
 RUN ./configure -j${RESTY_J} \
-    --with-pcre=/usr/local/openresty/pcre2 \
+    --with-pcre=/tmp/pcre2-${RESTY_PCRE_VERSION} \
     --with-cc-opt='-DNGX_LUA_ABORT_AT_PANIC -I/usr/local/openresty/pcre2/include -I/usr/local/openresty/openssl3/include' \
     --with-ld-opt='-L/usr/local/openresty/pcre2/lib -L/usr/local/openresty/openssl3/lib -Wl,-rpath,/usr/local/openresty/pcre2/lib:/usr/local/openresty/openssl3/lib' \
     --with-compat \
