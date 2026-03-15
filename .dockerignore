@@ -1,0 +1,36 @@
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Logs and caches
+*.log
+logs/
+*.pid
+
+# Environment generated files (should be created at runtime)
+nginx/conf/nginx.conf
+nginx/lua/env.lua
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.tar
+*.tar.gz
+*.tar.xz
+
+# Test
+test/
+data/

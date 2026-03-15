@@ -93,13 +93,34 @@ luarocks install lua-resty-http && luarocks install lua-resty-redis-connector &&
     cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*main/lib/* /usr/local/share/lua/5.1/ &&\
     cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/openresty/lua-resty-lrucache/archive/refs/heads/master.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
     cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk 'https://github.com/openresty/lua-resty-string/archive/refs/heads/master.zip' | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
-cd /usr/local/openresty/ && rm -rf luajit/lib/*.a openssl/include openssl/lib/*.a pcre/lib/*.a pcre/share resty.index pod nginx/conf/*.default &&\
+cd /usr/local/openresty/ && rm -rf \
+    luajit/lib/*.a \
+    openssl/include \
+    openssl/lib/*.a \
+    openssl/lib/engines-* \
+    openssl/lib/pkgconfig \
+    openssl/share \
+    pcre/lib/*.a \
+    pcre/share \
+    pcre/include \
+    resty.index \
+    pod \
+    nginx/conf/*.default \
+    nginx/logs/*.log \
+    nginx/temp \
+    site/lualib/*.ljbc \
+    site/lualib/*/init.ljbc \
+    lualib/cached \
+    lualib/resty/*.ljbc \
+&& \
+mkdir -p /var/run/openresty && \
 mv /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/ &&\
 sed -i 's@/usr/local/openresty/nginx/sbin/nginx@/usr/local/bin/nginx@' /usr/local/openresty/bin/resty &&\
 mkdir /usr/include/ -p && cp /usr/local/openresty/luajit/include/luajit-2.1/*.* /usr/include/ &&\
 ln -sf /usr/local/bin/nginx /usr/local/openresty/bin/openresty &&\
 ln -sf /usr/local/share/lua/5.1 /usr/local/openresty/site/lua &&\
-rm -rf /tmp/* /var/cache/luarocks &&\
+# 清理编译源码包和临时文件
+rm -rf /tmp/* /var/cache/luarocks /var/cache/apk /root/.cache &&\
 echo 'Custom module installed'"
 # Custom config End
 

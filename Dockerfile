@@ -6,23 +6,19 @@ WORKDIR /usr/local/openresty/nginx
 COPY ./nginx/ /usr/local/openresty/nginx
 
 
-RUN chmod a+x /usr/local/openresty/site/ -R && chmod a+x /usr/local/openresty/nginx/lua/ -R && chmod a+x /usr/local/openresty/nginx/bins/ -R && \
-	chmod 755 /usr/local/openresty/nginx/conf/*.sh && \
-	# Install libvips runtime + lua-vips binding
-	# LuaJIT has built-in FFI, so we mark luaffi-tkl as provided to skip its installation
-	apk add --no-cache vips vips-dev git && \
-	export LUAJIT_DIR=/usr/local/openresty/luajit && \
-	luarocks config rocks_provided.luaffi-tkl "2.1-1" && \
-	luarocks install lua-vips && \
-	apk del git && \
-	# cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk "https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.zip" | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*main/lib/* /usr/local/share/lua/5.1/ &&\
-	# cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk "https://github.com/fffonion/lua-resty-acme/archive/refs/heads/master.zip" | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
-	# cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk "https://github.com/fffonion/lua-resty-openssl/archive/refs/heads/master.zip" | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
-	# cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk "https://github.com/openresty/lua-resty-lrucache/archive/refs/heads/master.zip" | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
-	# cd /tmp/ && rm _tmp_ -rf && mkdir _tmp_ && curl -Lk "https://github.com/openresty/lua-resty-string/archive/refs/heads/master.zip" | bsdtar -xkf- -C _tmp_ && tree && mv _tmp_/*master/lib/resty/* /usr/local/share/lua/5.1/ &&\
-#	rm -rf /tmp/* &&\
-#apk add  --no-cache perl &&\
-	echo "Finished"
+RUN chmod a+x /usr/local/openresty/site/ -R && \
+    chmod a+x /usr/local/openresty/nginx/lua/ -R && \
+    chmod a+x /usr/local/openresty/nginx/bins/ -R && \
+    chmod 755 /usr/local/openresty/nginx/conf/*.sh && \
+    # Install libvips runtime + lua-vips binding
+    apk add --no-cache --virtual .vips-build vips-dev git && \
+    export LUAJIT_DIR=/usr/local/openresty/luajit && \
+    luarocks config rocks_provided.luaffi-tkl "2.1-1" && \
+    luarocks install lua-vips && \
+    # 清理 vips-dev git 和构建缓存
+    apk del .vips-build git && \
+    rm -rf /tmp/* /var/cache/luarocks /var/cache/apk /root/.cache && \
+    echo "Finished"
 
 ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/bin:/usr/local/openresty/nginx/bins  \
 LUA_PATH="/usr/local/openresty/nginx/lua/?.lua;/usr/local/openresty/nginx/lua/?/init.lua;/usr/local/openresty/site/lua/?.lua;/usr/local/openresty/site/lua/?/init.lua;/usr/local/openresty/site/lualib/?.lua;/usr/local/openresty/site/lualib/?/init.lua;/usr/local/openresty/lualib/?.lua;/usr/local/openresty/lualib/?/init.lua;./?.lua;/usr/local/openresty/site/lualib/?.ljbc;/usr/local/openresty/site/lualib/?/init.ljbc;/usr/local/openresty/lualib/?.ljbc;/usr/local/openresty/lualib/?/init.ljbc;/usr/local/openresty/luajit/share/luajit-2.1/?.lua;/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;/usr/local/openresty/luajit/share/lua/5.1/?.lua;/usr/local/openresty/luajit/share/lua/5.1/?/init.lua;" \
