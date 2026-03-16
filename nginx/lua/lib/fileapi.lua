@@ -107,12 +107,15 @@ pcall(ffi.cdef, [[
     int rename(const char *oldpath, const char *newpath);
     int unlink(const char *path);
     int rmdir(const char *path);
+    int lstat(const char *path, struct stat_t *buf);
 ]])
 
-local C       = ffi.C
-local S_IFMT  = 0xF000
-local S_IFDIR = 0x4000
-local DT_DIR  = 4
+local C          = ffi.C
+local S_IFMT     = 0xF000
+local S_IFDIR    = 0x4000
+local DT_UNKNOWN = 0
+local DT_DIR     = 4
+local DT_LNK     = 10
 
 -- ──────────────────────────────────────────────────────────
 -- Helpers
@@ -213,6 +216,14 @@ end
 -- Recursive directory removal (pure Lua, uses FFI readdir)
 -- Returns true on success, or false + message on error.
 -- ──────────────────────────────────────────────────────────
+-- lstat_is_dir: use lstat (does NOT follow symlinks) to check if path is a directory.
+-- Used as fallback when d_type == DT_UNKNOWN.
+local function lstat_is_dir(full_path)
+    local sb = ffi.new("struct stat_t")
+    if C.lstat(full_path, sb) ~= 0 then return false end
+    return bit.band(sb.st_mode, S_IFMT) == S_IFDIR
+end
+
 local function rmdir_recursive(path)
     local dp = C.opendir(path)
     if dp == nil then
@@ -224,10 +235,20 @@ local function rmdir_recursive(path)
     while entry ~= nil do
         local name = ffi.string(entry.d_name)
         if name ~= "." and name ~= ".." then
-            children[#children+1] = {
-                name   = name,
-                is_dir = (entry.d_type == DT_DIR),
-            }
+            local dtype  = entry.d_type
+            local full   = path .. "/" .. name
+            -- DT_LNK (10): symlink — always unlink, never recurse into it.
+            -- DT_UNKNOWN (0): filesystem doesn't populate d_type (e.g. some NFS mounts,
+            --   XFS with no dir_index) — fall back to lstat to determine the real type.
+            local is_dir
+            if dtype == DT_LNK then
+                is_dir = false
+            elseif dtype == DT_UNKNOWN then
+                is_dir = lstat_is_dir(full)
+            else
+                is_dir = (dtype == DT_DIR)
+            end
+            children[#children+1] = { name = name, is_dir = is_dir }
         end
         entry = C.readdir(dp)
     end
