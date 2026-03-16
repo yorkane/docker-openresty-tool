@@ -284,6 +284,43 @@
         setTimeout(showFocusBox, 100);
       }
     }
+
+    /* Restore focus + scroll when returning from a child directory via B key.
+       sessionStorage key '__or_back_from' holds the child's absolute pathname.
+       Match it against links whose resolved pathname starts with (or equals) that value. */
+    (function restoreBackFocus() {
+      var backFrom;
+      try { backFrom = sessionStorage.getItem('__or_back_from'); } catch(ex) {}
+      if (!backFrom) return;
+      try { sessionStorage.removeItem('__or_back_from'); } catch(ex) {}
+
+      var links = getAllLinks();
+      if (!links.length) return;
+
+      /* Find the link whose pathname matches the child directory we came from.
+         backFrom is an absolute path (e.g. /foo/bar/), so we compare against
+         the resolved pathname of each link's href. */
+      var targetIdx = -1;
+      for (var i = 0; i < links.length; i++) {
+        var lhref = links[i].getAttribute('href');
+        if (!lhref) continue;
+        var lpath = new URL(lhref, location.href).pathname;
+        /* Exact match or prefix match (handles trailing-slash variants) */
+        if (lpath === backFrom || lpath === backFrom.replace(/\/$/, '') ||
+            lpath.replace(/\/$/, '') === backFrom.replace(/\/$/, '')) {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx < 0) return;
+
+      focusIdx = targetIdx;
+      /* Use a slightly longer delay so the page has fully painted before scroll */
+      setTimeout(function() {
+        showFocusBox();
+        links[targetIdx].scrollIntoView({ block: 'center', behavior: 'instant' });
+      }, 120);
+    })();
   }
 
   /* ────────────────────────────────────────────
@@ -651,17 +688,26 @@
     if (!href || href.startsWith('?')) return;
 
     var abs = new URL(href, location.href).pathname;
+
+    /* Media files → open in overlay */
     if (isMedia(abs)) {
       var idx = items.findIndex
         ? items.findIndex(function(item){ return item.href === abs; })
         : (function(){ for(var i=0;i<items.length;i++) if(items[i].href===abs) return i; return -1; })();
       if (idx >= 0) { openAt(idx); return; }
     }
-    // All non-preview links → new tab
-    window.open(href, '_blank', 'noopener,noreferrer');
+
+    /* Directories and other non-media files → navigate in same tab.
+       Store the child pathname so goBack() can restore focus on return. */
+    if (abs.endsWith('/')) {
+      try { sessionStorage.setItem('__or_back_from', abs); } catch(ex) {}
+    }
+    location.href = href;
   }
 
   function goBack() {
+    /* Tell the parent page which child we came from so it can restore focus. */
+    try { sessionStorage.setItem('__or_back_from', location.pathname); } catch(ex) {}
     var parentLink = document.querySelector('a[href="../"], a[href="?dir=%2F"]');
     if (parentLink) { window.location.href = parentLink.getAttribute('href'); return; }
     if (window.history.length > 1) { window.history.back(); return; }
