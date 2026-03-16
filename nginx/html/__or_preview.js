@@ -7,12 +7,18 @@
  *   1:1 orig  – natural pixel size, scroll if larger than viewport
  *   🔄 rotate – auto-rotate 90° so long edge aligns with long screen edge
  *
- * Keyboard:  ↑/←  prev   ↓/→  next   Esc  close   Del  delete
- *            F  fit   O  orig   R  rotate
+ * Keyboard (preview open):
+ *   ↑/←  prev item   ↓/→  next item   Esc  close   Del  delete
+ *   F  fit   O  orig   R  rotate
+ *   Space  play/pause (video/audio)
+ *   M  toggle mute (video/audio)
+ *   ←/→  seek ±5s   Ctrl+←/→  seek ±30s   (video/audio only)
+ *   0-9  speed presets via numpad (optional – see SPEED_KEYS)
  *
- * Image preloading:
- *   After opening an image, the adjacent prev/next images are preloaded
- *   in the background so switching feels instant.
+ * Touch (video):
+ *   Press-and-hold on video → 2× speed while held, restore on release
+ *
+ * WebDAV links: all non-media file/dir links open in a new tab.
  */
 (function () {
   'use strict';
@@ -20,8 +26,13 @@
   /* ── Media type maps ── */
   var IMG = { jpg:1,jpeg:1,png:1,gif:1,webp:1,avif:1,bmp:1,svg:1,tiff:1,tif:1,
               jfif:1,jp2:1,jpx:1,heif:1,heic:1,jxl:1,ico:1,cur:1,rgb:1,pgm:1,ppm:1,pbm:1,pnm:1 };
-  var VID = { mp4:1,webm:1,mkv:1,mov:1,avi:1,m4v:1,ogv:1,ts:1,av1:1,wmv:1,flv:1,webm:1 };
+  var VID = { mp4:1,webm:1,mkv:1,mov:1,avi:1,m4v:1,ogv:1,ts:1,av1:1,wmv:1,flv:1 };
   var AUD = { mp3:1,ogg:1,wav:1,flac:1,aac:1,m4a:1,opus:1,wma:1,aiff:1 };
+
+  /* ── Playback speeds available in the dropdown ── */
+  var SPEEDS = [0.5, 1, 1.5, 2, 4, 10];
+  var HOLD_SPEED = 2;          // ×speed while finger held on video
+  var HOLD_DELAY_MS = 300;     // ms before hold-speed activates
 
   /* ── Helpers ── */
   function ext(h) {
@@ -29,6 +40,8 @@
   }
   function isMedia(h) { var e = ext(h); return IMG[e] || VID[e] || AUD[e]; }
   function isImg(h)   { return !!IMG[ext(h)]; }
+  function isVid(h)   { return !!VID[ext(h)]; }
+  function isAud(h)   { return !!AUD[ext(h)]; }
   function escHtml(s) {
     return s.replace(/[&<>"']/g, function (c) {
       return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
@@ -36,13 +49,22 @@
   }
   function isZipPath(h) { return /\.(zip|cbz|rar|7z)\//i.test(h); }
 
+  /* ── Preview icon by media type ── */
+  function previewIcon(href) {
+    var e = ext(href);
+    if (IMG[e]) return '🖼️';
+    if (VID[e]) return '▶️';
+    if (AUD[e]) return '🎵';
+    return '👁';
+  }
+
   /* ── View mode state ── */
   var viewMode = 'fit'; // 'fit' | 'orig' | 'rotate'
 
   /* ── Preload cache: href → HTMLImageElement ── */
   var preloadCache = {};
-  var PRELOAD_BACK  = 3; // preload this many images behind current
-  var PRELOAD_FWRD  = 6; // preload this many images ahead of current
+  var PRELOAD_BACK  = 3;
+  var PRELOAD_FWRD  = 6;
 
   function preload(href) {
     if (!isImg(href) || preloadCache[href]) return;
@@ -65,22 +87,52 @@
   /* ────────────────────────────────────────────
      Build overlay DOM (created once, reused)
   ──────────────────────────────────────────── */
-  var TOOLBAR_H = 44; // px – used only for size calculations
+  var TOOLBAR_H = 52; // px – taller for easier touch
 
-  /* Inject toolbar hover styles */
+  /* Inject styles */
   (function () {
     var s = document.createElement('style');
-    s.textContent =
-      '#__or_tb{opacity:.10;transition:opacity .2s;}' +
-      '#__or_tb:hover{opacity:1;}' +
-      '#__or_tb button{background:none;border:none;cursor:pointer;font-size:16px;' +
-        'padding:3px 7px;color:#fff;line-height:1.3;border-radius:4px;' +
-        'white-space:nowrap;flex-shrink:0;}' +
-      '#__or_tb button.active{background:rgba(255,255,255,.25);}' +
-      /* Focus box: high contrast for both dark and light backgrounds */
-      '#__or_focus{border:3px solid #ff9500;box-shadow:0 0 10px rgba(255,149,0,0.7),inset 0 0 10px rgba(255,149,0,0.4);}' +
-      /* Larger preview eye icon with better visibility */
-      '.__or_preview_btn{font-size:22px !important;padding:2px 6px !important;opacity:0.9 !important;text-shadow:1px 1px 2px rgba(0,0,0,0.8),-1px -1px 2px rgba(255,255,255,0.3) !important;}';
+    s.textContent = [
+      /* Toolbar auto-hide */
+      '#__or_tb{opacity:.12;transition:opacity .25s;}',
+      '#__or_tb:hover,#__or_tb:focus-within{opacity:1;}',
+      /* Toolbar buttons – bigger for touch */
+      '#__or_tb button,#__or_tb select{',
+        'background:none;border:none;cursor:pointer;',
+        'font-size:18px;padding:6px 10px;color:#fff;',
+        'line-height:1.2;border-radius:6px;white-space:nowrap;flex-shrink:0;',
+        'min-width:36px;min-height:36px;',
+      '}',
+      '#__or_tb select{',
+        'background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.3);',
+        'font-size:14px;padding:4px 6px;',
+      '}',
+      '#__or_tb button.active{background:rgba(255,255,255,.28);}',
+      '#__or_tb button:active{background:rgba(255,255,255,.18);}',
+      /* Focus ring */
+      '#__or_focus{border:3px solid #ff9500;',
+        'box-shadow:0 0 10px rgba(255,149,0,0.7),inset 0 0 10px rgba(255,149,0,0.4);}',
+      /* Preview buttons beside file links */
+      '.__or_preview_btn{',
+        'background:none;border:none;cursor:pointer;',
+        'font-size:26px;padding:2px 8px;line-height:1;',
+        'vertical-align:middle;opacity:.9;',
+        'text-shadow:1px 1px 3px rgba(0,0,0,0.9),-1px -1px 2px rgba(255,255,255,0.2);',
+      '}',
+      /* Speed indicator OSD */
+      '#__or_speed_osd{',
+        'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);',
+        'background:rgba(0,0,0,.7);color:#fff;font-size:28px;',
+        'padding:10px 24px;border-radius:10px;pointer-events:none;',
+        'opacity:0;transition:opacity .3s;z-index:10;',
+      '}',
+      /* Responsive toolbar: wrap on very narrow screens */
+      '@media(max-width:480px){',
+        '#__or_tb{flex-wrap:wrap;height:auto;padding:4px 6px;gap:3px;}',
+        '#__or_title{font-size:12px;}',
+        '#__or_tb button,#__or_tb select{font-size:16px;padding:5px 8px;min-width:32px;min-height:32px;}',
+      '}',
+    ].join('');
     document.head.appendChild(s);
   })();
 
@@ -89,37 +141,45 @@
   ov.style.cssText =
     'display:none;position:fixed;inset:0;z-index:99999;background:#111;';
 
-  /* toolbar – absolutely positioned, overlays the media */
+  /* Toolbar */
   var tb = document.createElement('div');
   tb.id = '__or_tb';
   tb.style.cssText =
-    'position:absolute;top:0;left:0;right:0;height:' + TOOLBAR_H + 'px;' +
+    'position:absolute;top:0;left:0;right:0;min-height:' + TOOLBAR_H + 'px;' +
     'display:flex;align-items:center;' +
-    'padding:0 10px;gap:5px;background:rgba(0,0,0,.55);color:#fff;' +
-    'font-size:14px;z-index:2;box-sizing:border-box;overflow:hidden;';
+    'padding:0 10px;gap:4px;background:rgba(0,0,0,.6);color:#fff;' +
+    'font-size:14px;z-index:2;box-sizing:border-box;overflow:visible;';
 
-  function bStyle(active) {
-    return (active ? 'background:rgba(255,255,255,.25);' : '') +
-      'border:none;cursor:pointer;font-size:16px;padding:3px 7px;color:#fff;' +
-      'line-height:1.3;border-radius:4px;white-space:nowrap;flex-shrink:0;';
+  function mkBtn(id, title, label, active) {
+    return '<button id="' + id + '" title="' + title + '"' +
+      (active ? ' class="active"' : '') + '>' + label + '</button>';
   }
 
   tb.innerHTML =
     '<span id="__or_title" style="flex:1;overflow:hidden;text-overflow:ellipsis;' +
-      'white-space:nowrap;min-width:0;margin-right:4px"></span>' +
-    '<span id="__or_idx" style="opacity:.55;white-space:nowrap;margin-right:6px;' +
-      'font-size:12px;flex-shrink:0"></span>' +
-    // view mode
-    '<button id="__or_vfit"  title="适应窗口 (F)" style="' + bStyle(true)  + '">⛶</button>' +
-    '<button id="__or_vorig" title="原始大小 (O)" style="' + bStyle(false) + '">1:1</button>' +
-    '<button id="__or_vrot"  title="长边旋转 (R)" style="' + bStyle(false) + '">🔄</button>' +
-    // nav + actions
-    '<button id="__or_prev"  title="上一个 ↑"     style="' + bStyle(false) + '">⬆️</button>' +
-    '<button id="__or_next"  title="下一个 ↓"     style="' + bStyle(false) + '">⬇️</button>' +
-    '<button id="__or_del"   title="删除 Del"     style="' + bStyle(false) + '">🗑️</button>' +
-    '<button id="__or_cls"   title="关闭 Esc"     style="' + bStyle(false) + '">✖️</button>';
+      'white-space:nowrap;min-width:0;margin-right:4px;font-size:13px;"></span>' +
+    '<span id="__or_idx" style="opacity:.55;white-space:nowrap;margin-right:4px;' +
+      'font-size:12px;flex-shrink:0;"></span>' +
+    /* view mode */
+    mkBtn('__or_vfit',  '适应窗口 (F)', '⛶',  true)  +
+    mkBtn('__or_vorig', '原始大小 (O)', '1:1', false) +
+    mkBtn('__or_vrot',  '长边旋转 (R)', '🔄', false) +
+    /* speed dropdown – only shown for video/audio */
+    '<select id="__or_speed" title="播放速度" style="display:none">' +
+      SPEEDS.map(function(s){ return '<option value="'+s+'"'+(s===1?' selected':'')+'>'+s+'×</option>'; }).join('') +
+    '</select>' +
+    /* nav + actions */
+    mkBtn('__or_prev', '上一个 ↑',  '⬆️', false) +
+    mkBtn('__or_next', '下一个 ↓',  '⬇️', false) +
+    mkBtn('__or_del',  '删除 Del',   '🗑️', false) +
+    mkBtn('__or_cls',  '关闭 Esc',   '✖️', false);
 
-  /* media area – fills the entire overlay */
+  /* Speed OSD */
+  var speedOsd = document.createElement('div');
+  speedOsd.id = '__or_speed_osd';
+  speedOsd.textContent = '';
+
+  /* media area */
   var mediaEl = document.createElement('div');
   mediaEl.id = '__or_media';
   mediaEl.style.cssText =
@@ -127,11 +187,12 @@
     'justify-content:center;overflow:hidden;';
 
   ov.appendChild(tb);
+  ov.appendChild(speedOsd);
   ov.appendChild(mediaEl);
   ov.style.display = 'none';
   document.body.appendChild(ov);
 
-  /* Focus box element for non-preview navigation */
+  /* Focus box */
   var focusBox = document.createElement('div');
   focusBox.id = '__or_focus';
   focusBox.style.cssText =
@@ -144,14 +205,33 @@
   var items = []; // [{href, name}]
   var cur = 0;
 
-  /* Focus box state (non-preview mode) */
   var focusIdx = -1;
-  var focusEl = null;
-  var isMuted = false;
-  var currentMediaEl = null; // current video/audio element for volume control
+  var focusEl  = null;
+  var currentMediaEl = null;
+  var holdTimer = null;
+  var holdActive = false;
+  var normalSpeed = 1;
+
+  /* ── Speed OSD helper ── */
+  var osdTimer = null;
+  function showSpeedOsd(label) {
+    speedOsd.textContent = label;
+    speedOsd.style.opacity = '1';
+    if (osdTimer) clearTimeout(osdTimer);
+    osdTimer = setTimeout(function() { speedOsd.style.opacity = '0'; }, 900);
+  }
+
+  /* ── Set playback speed ── */
+  function setSpeed(s) {
+    normalSpeed = s;
+    if (currentMediaEl) currentMediaEl.playbackRate = s;
+    var sel = document.getElementById('__or_speed');
+    if (sel) sel.value = String(s);
+    showSpeedOsd(s + '×');
+  }
 
   /* ────────────────────────────────────────────
-     Scan page and inject 👁 buttons
+     Scan page and inject preview buttons + open links in new tab
   ──────────────────────────────────────────── */
   function init() {
     document.querySelectorAll('a[href]').forEach(function (a, aIdx) {
@@ -159,21 +239,24 @@
       if (!href || href.startsWith('?') || href === '../') return;
       var abs = new URL(href, location.href).pathname;
 
-      // Mark all links with index for focus box
+      /* ① All links open in new tab (WebDAV client opens the link, browser
+            opens a preview in a new window so WebDAV connection is unaffected) */
+      a.target = '_blank';
+      a.rel    = 'noopener noreferrer';
+
+      /* Mark for focus-box */
       a.dataset.listIdx = String(aIdx);
 
       if (!isMedia(abs)) return;
+
       var idx = items.length;
       items.push({ href: abs, name: decodeURIComponent(abs.split('/').pop()) });
+
       var btn = document.createElement('button');
-      btn.textContent = '👁';
+      btn.textContent = previewIcon(abs);
       btn.title = '预览 (Enter)';
       btn.dataset.idx = String(idx);
       btn.className = '__or_preview_btn';
-      btn.style.cssText =
-        'background:none;border:none;cursor:pointer;font-size:22px;' +
-        'padding:2px 6px;line-height:1;vertical-align:middle;opacity:.9;' +
-        'text-shadow:1px 1px 2px rgba(0,0,0,0.8),-1px -1px 2px rgba(255,255,255,0.3);';
       btn.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -181,7 +264,7 @@
       });
       a.parentNode.insertBefore(btn, a);
     });
-    // Auto-show focus box on first file after init
+
     if (items.length > 0) {
       focusIdx = 0;
       setTimeout(showFocusBox, 100);
@@ -193,14 +276,17 @@
   ──────────────────────────────────────────── */
   function openAt(idx) {
     cur = (idx + items.length) % items.length;
+    normalSpeed = 1;
     render();
     ov.style.display = 'block';
     document.body.style.overflow = 'hidden';
-    hideFocusBox(); // Hide focus box when preview opens
+    hideFocusBox();
     preloadAround(cur);
   }
 
   function closeOv() {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    holdActive = false;
     ov.style.display = 'none';
     document.body.style.overflow = '';
     mediaEl.innerHTML = '';
@@ -218,6 +304,15 @@
     mediaEl.style.overflow = (viewMode === 'orig') ? 'auto' : 'hidden';
 
     var e = ext(item.href);
+    var isAV = VID[e] || AUD[e];
+
+    /* Speed dropdown: show only for video/audio */
+    var speedSel = document.getElementById('__or_speed');
+    if (speedSel) {
+      speedSel.style.display = isAV ? '' : 'none';
+      speedSel.value = String(normalSpeed);
+    }
+
     if (IMG[e])      renderImg(item);
     else if (VID[e]) renderVid(item);
     else if (AUD[e]) renderAud(item);
@@ -228,9 +323,6 @@
 
   /* ────────────────────────────────────────────
      Image rendering
-     fit    → max-width:100% max-height:100%  (contain, no crop)
-     orig   → natural size, parent scrolls
-     rotate → CSS rotate(90deg)+scale so long edge fills long screen edge
   ──────────────────────────────────────────── */
   function applyImgMode(img) {
     var nw = img.naturalWidth  || 1;
@@ -238,35 +330,25 @@
     var sw = mediaEl.clientWidth  || window.innerWidth;
     var sh = mediaEl.clientHeight || window.innerHeight;
 
-    /* reset */
     img.style.cssText = 'display:block;max-width:none;max-height:none;' +
       'width:auto;height:auto;transform:none;transform-origin:center center;flex-shrink:0;';
 
     if (viewMode === 'orig') {
-      /* 1:1 – natural pixels */
       img.style.width  = nw + 'px';
       img.style.height = nh + 'px';
-
     } else if (viewMode === 'fit') {
-      /* Contain: scale down (or up) to fit both dimensions, keep ratio, no crop */
       var scale = Math.min(sw / nw, sh / nh);
       img.style.width  = Math.round(nw * scale) + 'px';
       img.style.height = Math.round(nh * scale) + 'px';
-
     } else if (viewMode === 'rotate') {
-      /* Rotate 90° when media orientation differs from screen orientation */
       var mediaPortrait  = nh > nw;
       var screenPortrait = sh > sw;
       if (mediaPortrait !== screenPortrait) {
-        /* After rotation, natural w/h axes swap:
-           rotated-display-w = nh, rotated-display-h = nw
-           scale so the rotated image fits entirely inside the viewport */
         var s = Math.min(sw / nh, sh / nw);
         img.style.width  = nw + 'px';
         img.style.height = nh + 'px';
         img.style.transform = 'rotate(90deg) scale(' + s.toFixed(5) + ')';
       } else {
-        /* Same orientation – just contain */
         var sc = Math.min(sw / nw, sh / nh);
         img.style.width  = Math.round(nw * sc) + 'px';
         img.style.height = Math.round(nh * sc) + 'px';
@@ -275,21 +357,14 @@
   }
 
   function renderImg(item) {
-    /* Re-use preloaded image element if available */
     var img = preloadCache[item.href] || new Image();
     img.alt = item.name;
     img.style.display = 'block';
-
     function doApply() { applyImgMode(img); }
-
-    if (img.complete && img.naturalWidth) {
-      doApply();
-    } else {
-      img.onload = doApply;
-    }
-    if (!img.src) img.src = item.href;  // not yet started
+    if (img.complete && img.naturalWidth) { doApply(); }
+    else { img.onload = doApply; }
+    if (!img.src) img.src = item.href;
     mediaEl.appendChild(img);
-    /* Kick off adjacent preloads after a short delay to not compete with current load */
     setTimeout(function () { preloadAround(cur); }, 200);
   }
 
@@ -308,12 +383,10 @@
     if (viewMode === 'orig') {
       vid.style.width  = vw + 'px';
       vid.style.height = vh + 'px';
-
     } else if (viewMode === 'fit') {
       var scale = Math.min(sw / vw, sh / vh);
       vid.style.width  = Math.round(vw * scale) + 'px';
       vid.style.height = Math.round(vh * scale) + 'px';
-
     } else if (viewMode === 'rotate') {
       var mediaPortrait  = vh > vw;
       var screenPortrait = sh > sw;
@@ -335,14 +408,42 @@
     vid.src = item.href;
     vid.controls = true;
     vid.autoplay = true;
+    vid.muted = true;           // ④ default muted
+    vid.playbackRate = normalSpeed;
     currentMediaEl = vid;
+
     vid.addEventListener('loadedmetadata', function () { applyVidMode(vid); });
-    applyVidMode(vid); // initial sizing before metadata
+    applyVidMode(vid);
+
+    /* ── Touch hold → temporary speed boost ── */
+    vid.addEventListener('touchstart', function (e) {
+      // Only intercept if not touching controls area (bottom ~15% of element)
+      var rect = vid.getBoundingClientRect();
+      var touchY = e.touches[0].clientY;
+      if (touchY > rect.bottom - rect.height * 0.15) return; // let controls handle it
+      holdTimer = setTimeout(function () {
+        holdActive = true;
+        vid.playbackRate = HOLD_SPEED;
+        showSpeedOsd(HOLD_SPEED + '× (按住)');
+      }, HOLD_DELAY_MS);
+    }, { passive: true });
+
+    function endHold() {
+      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+      if (holdActive) {
+        holdActive = false;
+        vid.playbackRate = normalSpeed;
+        showSpeedOsd(normalSpeed + '×');
+      }
+    }
+    vid.addEventListener('touchend',    endHold, { passive: true });
+    vid.addEventListener('touchcancel', endHold, { passive: true });
+
     mediaEl.appendChild(vid);
   }
 
   /* ────────────────────────────────────────────
-     Audio rendering (no view mode)
+     Audio rendering
   ──────────────────────────────────────────── */
   function renderAud(item) {
     var wrap = document.createElement('div');
@@ -355,6 +456,7 @@
     aud.src = item.href;
     aud.controls = true;
     aud.autoplay = true;
+    aud.playbackRate = normalSpeed;
     currentMediaEl = aud;
     aud.style.width = '320px';
     wrap.appendChild(aud);
@@ -370,7 +472,7 @@
       var b = document.getElementById(id);
       if (!b) return;
       b.style.display = showViewBtns ? '' : 'none';
-      b.style.background = map[id] === viewMode ? 'rgba(255,255,255,.25)' : '';
+      b.classList.toggle('active', map[id] === viewMode);
     });
   }
 
@@ -393,9 +495,7 @@
     if (!confirm('🗑️ 确认删除？\n\n' + item.name)) return;
     fetch('/api/rm' + item.href, { method: 'DELETE' }).then(function (r) {
       if (r.ok) {
-        // Remove cached preload entry
         delete preloadCache[item.href];
-        // Update page buttons
         document.querySelectorAll('button[data-idx]').forEach(function (b) {
           var i = parseInt(b.dataset.idx, 10);
           if (i === cur) b.remove();
@@ -419,22 +519,30 @@
   ──────────────────────────────────────────── */
   function setView(m) { viewMode = m; render(); }
 
-  /* ── Volume control ── */
-  function adjustVolume(delta) {
-    if (!currentMediaEl) return;
-    var v = Math.min(1, Math.max(0, (currentMediaEl.volume || 0) + delta));
-    currentMediaEl.volume = v;
-    currentMediaEl.muted = false;
-    isMuted = false;
-  }
-
+  /* ── Mute toggle ── */
   function toggleMute() {
     if (!currentMediaEl) return;
-    isMuted = !isMuted;
-    currentMediaEl.muted = isMuted;
+    currentMediaEl.muted = !currentMediaEl.muted;
+    showSpeedOsd(currentMediaEl.muted ? '🔇' : '🔊');
   }
 
-  /* ── Focus box functions ── */
+  /* ── Seek (video/audio) ── */
+  function seekBy(secs) {
+    if (!currentMediaEl) return;
+    var t = currentMediaEl.currentTime + secs;
+    t = Math.max(0, Math.min(currentMediaEl.duration || 0, t));
+    currentMediaEl.currentTime = t;
+    showSpeedOsd((secs > 0 ? '+' : '') + secs + 's');
+  }
+
+  /* ── Play/pause toggle ── */
+  function togglePlay() {
+    if (!currentMediaEl) return;
+    if (currentMediaEl.paused) { currentMediaEl.play(); showSpeedOsd('▶'); }
+    else { currentMediaEl.pause(); showSpeedOsd('⏸'); }
+  }
+
+  /* ── Focus box ── */
   function getAllLinks() {
     return Array.from(document.querySelectorAll('a[href]')).filter(function(a) {
       var href = a.getAttribute('href');
@@ -444,7 +552,7 @@
 
   function showFocusBox() {
     var links = getAllLinks();
-    if (links.length === 0) return;
+    if (!links.length) return;
     focusIdx = Math.max(0, focusIdx);
     if (focusIdx >= links.length) focusIdx = 0;
     updateFocusBox(links[focusIdx]);
@@ -454,10 +562,10 @@
   function updateFocusBox(linkEl) {
     if (!linkEl) return;
     var rect = linkEl.getBoundingClientRect();
-    focusBox.style.width = (rect.width + 4) + 'px';
+    focusBox.style.width  = (rect.width  + 4) + 'px';
     focusBox.style.height = (rect.height + 4) + 'px';
-    focusBox.style.top = (rect.top - 2) + 'px';
-    focusBox.style.left = (rect.left - 2) + 'px';
+    focusBox.style.top    = (rect.top  - 2 + window.scrollY) + 'px';
+    focusBox.style.left   = (rect.left - 2 + window.scrollX) + 'px';
   }
 
   function hideFocusBox() {
@@ -467,60 +575,41 @@
 
   function moveFocus(delta) {
     var links = getAllLinks();
-    if (links.length === 0) return;
+    if (!links.length) return;
     focusIdx = (focusIdx + delta + links.length) % links.length;
-    var link = links[focusIdx];
-    updateFocusBox(link);
-    link.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    updateFocusBox(links[focusIdx]);
+    links[focusIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
   function activateFocus() {
     var links = getAllLinks();
-    if (links.length === 0 || focusIdx < 0 || focusIdx >= links.length) return;
+    if (!links.length || focusIdx < 0 || focusIdx >= links.length) return;
     var link = links[focusIdx];
     var href = link.getAttribute('href');
     if (!href || href.startsWith('?')) return;
 
-    // Check if it's a directory (ends with /) or navigable
-    if (href.endsWith('/')) {
-      // Directory navigate to it
-      window.location.href = href;
-    } else if (isMedia(new URL(href, location.href).pathname)) {
-      // Media file - open preview
-      var idx = items.findIndex(function(item) {
-        return item.href === new URL(href, location.href).pathname;
-      });
-      if (idx >= 0) {
-        openAt(idx);
-      } else {
-        // Not in items list, navigate to it directly
-        window.location.href = href;
-      }
-    } else {
-      // Other file - navigate normally
-      window.location.href = href;
+    var abs = new URL(href, location.href).pathname;
+    if (isMedia(abs)) {
+      var idx = items.findIndex
+        ? items.findIndex(function(item){ return item.href === abs; })
+        : (function(){ for(var i=0;i<items.length;i++) if(items[i].href===abs) return i; return -1; })();
+      if (idx >= 0) { openAt(idx); return; }
     }
+    // All non-preview links → new tab
+    window.open(href, '_blank', 'noopener,noreferrer');
   }
 
   function goBack() {
-    // Check for parent directory link
     var parentLink = document.querySelector('a[href="../"], a[href="?dir=%2F"]');
-    if (parentLink) {
-      window.location.href = parentLink.getAttribute('href');
-    } else if (window.history.length > 1) {
-      window.history.back();
-    } else {
-      // Fallback: try to go to parent path
-      var path = location.pathname;
-      var lastSlash = path.lastIndexOf('/', path.length - 2);
-      if (lastSlash > 0) {
-        location.href = path.substring(0, lastSlash + 1) || '/';
-      }
-    }
+    if (parentLink) { window.location.href = parentLink.getAttribute('href'); return; }
+    if (window.history.length > 1) { window.history.back(); return; }
+    var path = location.pathname;
+    var lastSlash = path.lastIndexOf('/', path.length - 2);
+    if (lastSlash > 0) location.href = path.substring(0, lastSlash + 1) || '/';
   }
 
   /* ────────────────────────────────────────────
-     Wire events
+     Wire toolbar events
   ──────────────────────────────────────────── */
   document.getElementById('__or_vfit').onclick  = function () { setView('fit');    };
   document.getElementById('__or_vorig').onclick = function () { setView('orig');   };
@@ -530,86 +619,85 @@
   document.getElementById('__or_del').onclick   = doDelete;
   document.getElementById('__or_cls').onclick   = closeOv;
 
-  /* Click on media area → next item; click outside (bare overlay bg) → close */
+  /* Speed dropdown */
+  document.getElementById('__or_speed').addEventListener('change', function () {
+    setSpeed(parseFloat(this.value));
+  });
+
+  /* Click on image area → next; click on bare overlay → close */
   mediaEl.addEventListener('click', function (e) {
-    /* If clicking on a video element, let the browser handle it (controls) */
     if (e.target && e.target.tagName === 'VIDEO') return;
-    /* If clicking on an audio element or its wrapper, ignore */
     if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'DIV')) return;
     openAt(cur + 1);
   });
 
   ov.addEventListener('click', function (e) { if (e.target === ov) closeOv(); });
 
+  /* ────────────────────────────────────────────
+     Keyboard
+  ──────────────────────────────────────────── */
   document.addEventListener('keydown', function (e) {
     var inPreview = ov.style.display !== 'none';
+    var hasMedia  = !!currentMediaEl;
+    var isVideo   = hasMedia && currentMediaEl.tagName === 'VIDEO';
 
     if (inPreview) {
-      // Preview mode keyboard controls
       switch (e.key) {
         case 'Escape':
-          closeOv();
-          showFocusBox(); // Return to focus mode
-          break;
+          closeOv(); showFocusBox(); break;
+
+        /* Image/media navigation */
         case 'ArrowUp':
-          openAt(cur - 1);
-          break;
+          openAt(cur - 1); e.preventDefault(); break;
         case 'ArrowDown':
-          openAt(cur + 1);
-          break;
+          openAt(cur + 1); e.preventDefault(); break;
+
+        /* Left/Right: seek for video/audio, prev/next for images */
         case 'ArrowLeft':
-          if (currentMediaEl) {
-            adjustVolume(-0.1);
+          if (hasMedia && !IMG[ext(items[cur].href)]) {
+            e.preventDefault();
+            seekBy(e.ctrlKey ? -30 : -5);
+          } else {
+            openAt(cur - 1); e.preventDefault();
           }
           break;
         case 'ArrowRight':
-          if (currentMediaEl) {
-            adjustVolume(0.1);
+          if (hasMedia && !IMG[ext(items[cur].href)]) {
+            e.preventDefault();
+            seekBy(e.ctrlKey ? 30 : 5);
+          } else {
+            openAt(cur + 1); e.preventDefault();
           }
           break;
+
+        case ' ':
+          if (hasMedia) { e.preventDefault(); togglePlay(); }
+          break;
+
         case 'Delete':
-          doDelete();
-          break;
-        case 'f': case 'F':
-          setView('fit');
-          break;
-        case 'o': case 'O':
-          setView('orig');
-          break;
-        case 'r': case 'R':
-          setView('rotate');
-          break;
+          doDelete(); break;
+
+        case 'f': case 'F': setView('fit');    break;
+        case 'o': case 'O': setView('orig');   break;
+        case 'r': case 'R': setView('rotate'); break;
+
         case 'm': case 'M':
-          toggleMute();
-          break;
+          toggleMute(); break;
+
         case 'b': case 'B':
-          closeOv();
-          showFocusBox();
-          break;
+          closeOv(); showFocusBox(); break;
       }
     } else {
-      // Non-preview mode: focus box navigation
       switch (e.key) {
-        case 'ArrowUp':
-          e.preventDefault();
-          moveFocus(-1);
-          break;
-        case 'ArrowDown':
-          e.preventDefault();
-          moveFocus(1);
-          break;
-        case 'Enter':
-          e.preventDefault();
-          activateFocus();
-          break;
-        case 'b': case 'B':
-          goBack();
-          break;
+        case 'ArrowUp':   e.preventDefault(); moveFocus(-1); break;
+        case 'ArrowDown': e.preventDefault(); moveFocus(1);  break;
+        case 'Enter':     e.preventDefault(); activateFocus(); break;
+        case 'b': case 'B': goBack(); break;
       }
     }
   });
 
-  /* ── Window resize: re-apply current mode ── */
+  /* ── Window resize ── */
   window.addEventListener('resize', function () {
     if (ov.style.display === 'none') return;
     render();
