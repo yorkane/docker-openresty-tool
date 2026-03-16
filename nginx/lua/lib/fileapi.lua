@@ -108,6 +108,8 @@ pcall(ffi.cdef, [[
     int unlink(const char *path);
     int rmdir(const char *path);
     int lstat(const char *path, struct stat_t *buf);
+    int *__errno_location(void);
+    char *strerror(int errnum);
 ]])
 
 local C          = ffi.C
@@ -116,6 +118,16 @@ local S_IFDIR    = 0x4000
 local DT_UNKNOWN = 0
 local DT_DIR     = 4
 local DT_LNK     = 10
+
+-- Read errno and return "N (description)" string, e.g. "13 (Permission denied)"
+local function errmsg()
+    local ok, s = pcall(function()
+        local eno = C.__errno_location()[0]
+        local desc = ffi.string(C.strerror(eno))
+        return tostring(eno) .. " (" .. desc .. ")"
+    end)
+    return ok and s or "?"
+end
 
 -- ──────────────────────────────────────────────────────────
 -- Helpers
@@ -220,14 +232,25 @@ end
 -- Used as fallback when d_type == DT_UNKNOWN.
 local function lstat_is_dir(full_path)
     local sb = ffi.new("struct stat_t")
-    if C.lstat(full_path, sb) ~= 0 then return false end
-    return bit.band(sb.st_mode, S_IFMT) == S_IFDIR
+    if C.lstat(full_path, sb) ~= 0 then
+        ngx.log(ngx.WARN, "[fileapi] lstat failed for: ", full_path, " errno=", errmsg())
+        return false
+    end
+    local mode = tonumber(sb.st_mode)
+    local is_d = bit.band(mode, S_IFMT) == S_IFDIR
+    ngx.log(ngx.DEBUG, "[fileapi] lstat fallback: ", full_path,
+            " mode=0", string.format("%o", mode), " is_dir=", tostring(is_d))
+    return is_d
 end
 
 local function rmdir_recursive(path)
+    ngx.log(ngx.INFO, "[fileapi] rmdir_recursive enter: ", path)
+
     local dp = C.opendir(path)
     if dp == nil then
-        return false, "cannot open directory: " .. path
+        local e = errmsg()
+        ngx.log(ngx.ERR, "[fileapi] opendir failed: ", path, " errno=", e)
+        return false, "cannot open directory: " .. path .. " errno=" .. e
     end
 
     local entry = C.readdir(dp)
@@ -237,16 +260,16 @@ local function rmdir_recursive(path)
         if name ~= "." and name ~= ".." then
             local dtype  = entry.d_type
             local full   = path .. "/" .. name
-            -- DT_LNK (10): symlink — always unlink, never recurse into it.
-            -- DT_UNKNOWN (0): filesystem doesn't populate d_type (e.g. some NFS mounts,
-            --   XFS with no dir_index) — fall back to lstat to determine the real type.
             local is_dir
             if dtype == DT_LNK then
                 is_dir = false
+                ngx.log(ngx.DEBUG, "[fileapi] entry symlink: ", full)
             elseif dtype == DT_UNKNOWN then
+                ngx.log(ngx.INFO, "[fileapi] d_type=DT_UNKNOWN for: ", full, " — falling back to lstat")
                 is_dir = lstat_is_dir(full)
             else
                 is_dir = (dtype == DT_DIR)
+                ngx.log(ngx.DEBUG, "[fileapi] entry dtype=", tostring(dtype), " is_dir=", tostring(is_dir), " path=", full)
             end
             children[#children+1] = { name = name, is_dir = is_dir }
         end
@@ -254,21 +277,31 @@ local function rmdir_recursive(path)
     end
     C.closedir(dp)
 
+    ngx.log(ngx.INFO, "[fileapi] rmdir_recursive: ", path, " children=", #children)
+
     for _, child in ipairs(children) do
         local full = path .. "/" .. child.name
         if child.is_dir then
             local ok, msg = rmdir_recursive(full)
             if not ok then return false, msg end
         else
+            ngx.log(ngx.DEBUG, "[fileapi] unlink: ", full)
             if C.unlink(full) ~= 0 then
-                return false, "unlink failed: " .. full
+                local e = errmsg()
+                ngx.log(ngx.ERR, "[fileapi] unlink failed: ", full, " errno=", e)
+                return false, "unlink failed: " .. full .. " errno=" .. e
             end
         end
     end
 
+    ngx.log(ngx.DEBUG, "[fileapi] rmdir: ", path)
     if C.rmdir(path) ~= 0 then
-        return false, "rmdir failed: " .. path
+        local e = errmsg()
+        ngx.log(ngx.ERR, "[fileapi] rmdir failed: ", path, " errno=", e)
+        return false, "rmdir failed: " .. path .. " errno=" .. e
     end
+
+    ngx.log(ngx.INFO, "[fileapi] rmdir_recursive ok: ", path)
     return true, nil
 end
 
@@ -317,32 +350,45 @@ function _M.handle_rm(webdav_root)
     local user_path = uri:match("^/api/rm(/?.*)$") or "/"
     if user_path == "" then user_path = "/" end
 
+    ngx.log(ngx.INFO, "[fileapi] DELETE rm: uri=", uri, " user_path=", user_path, " root=", webdav_root)
+
     local abs, e = resolve_path(webdav_root, user_path)
     if not abs then
+        ngx.log(ngx.WARN, "[fileapi] resolve_path failed: ", e)
         return send_json(400, e)
     end
 
     -- Must not delete webdav_root itself
     if abs == webdav_root then
+        ngx.log(ngx.WARN, "[fileapi] attempt to delete webdav root: ", abs)
         return send_json(403, err("forbidden", "cannot delete webdav root"))
     end
 
     local attr = do_stat(abs)
     if not attr then
+        ngx.log(ngx.WARN, "[fileapi] rm: path not found: ", abs)
         return send_json(404, err("not_found", "path not found"))
     end
+
+    ngx.log(ngx.INFO, "[fileapi] rm: abs=", abs, " is_dir=", tostring(attr.is_dir),
+            " mode=0", string.format("%o", attr.mode))
 
     if attr.is_dir then
         local ok, msg = rmdir_recursive(abs)
         if not ok then
+            ngx.log(ngx.ERR, "[fileapi] rmdir_recursive failed: ", msg)
             return send_json(500, err("internal", msg or "delete failed"))
         end
     else
+        ngx.log(ngx.DEBUG, "[fileapi] unlink file: ", abs)
         if C.unlink(abs) ~= 0 then
-            return send_json(500, err("internal", "unlink failed: " .. abs))
+            local e2 = errmsg()
+            ngx.log(ngx.ERR, "[fileapi] unlink failed: ", abs, " errno=", e2)
+            return send_json(500, err("internal", "unlink failed: " .. abs .. " errno=" .. e2))
         end
     end
 
+    ngx.log(ngx.INFO, "[fileapi] rm ok: ", abs)
     return send_json(200, OK_JSON)
 end
 
@@ -372,23 +418,29 @@ function _M.handle_move(webdav_root)
         return send_json(400, err("bad_request", "missing 'to' field"))
     end
 
+    ngx.log(ngx.INFO, "[fileapi] move: from=", from_path, " to=", to_path, " overwrite=", tostring(overwrite))
+
     local abs_from, e1 = resolve_path(webdav_root, from_path)
     if not abs_from then
+        ngx.log(ngx.WARN, "[fileapi] move: bad from path: ", e1)
         return send_json(400, e1)
     end
     local abs_to, e2 = resolve_path(webdav_root, to_path)
     if not abs_to then
+        ngx.log(ngx.WARN, "[fileapi] move: bad to path: ", e2)
         return send_json(400, e2)
     end
 
     -- Source must exist
     if not do_stat(abs_from) then
+        ngx.log(ngx.WARN, "[fileapi] move: source not found: ", abs_from)
         return send_json(404, err("not_found", "source path not found"))
     end
 
     -- Destination must not exist (unless overwrite=true)
     local dst_attr = do_stat(abs_to)
     if dst_attr and not overwrite then
+        ngx.log(ngx.WARN, "[fileapi] move: destination exists and overwrite=false: ", abs_to)
         return send_json(409, err("conflict", "destination already exists; set overwrite:true to replace"))
     end
 
@@ -397,14 +449,18 @@ function _M.handle_move(webdav_root)
     if dst_parent == "" then dst_parent = "/" end
     local ok_p, msg_p = mkdir_p(dst_parent)
     if not ok_p then
+        ngx.log(ngx.ERR, "[fileapi] move: mkdir_p failed for parent: ", dst_parent, " err=", msg_p)
         return send_json(500, err("internal", "cannot create destination parent: " .. (msg_p or "")))
     end
 
     -- rename() works across directories on the same filesystem
     if C.rename(abs_from, abs_to) ~= 0 then
-        return send_json(500, err("internal", "rename failed"))
+        local e3 = errmsg()
+        ngx.log(ngx.ERR, "[fileapi] rename failed: ", abs_from, " -> ", abs_to, " errno=", e3)
+        return send_json(500, err("internal", "rename failed: errno=" .. e3))
     end
 
+    ngx.log(ngx.INFO, "[fileapi] move ok: ", abs_from, " -> ", abs_to)
     return send_json(200, OK_JSON)
 end
 
@@ -422,8 +478,11 @@ function _M.handle_mkdir(webdav_root)
     local user_path = uri:match("^/api/mkdir(/?.*)$") or "/"
     if user_path == "" then user_path = "/" end
 
+    ngx.log(ngx.INFO, "[fileapi] mkdir: user_path=", user_path)
+
     local abs, e = resolve_path(webdav_root, user_path)
     if not abs then
+        ngx.log(ngx.WARN, "[fileapi] mkdir: resolve failed: ", e)
         return send_json(400, e)
     end
 
@@ -435,18 +494,21 @@ function _M.handle_mkdir(webdav_root)
     local attr = do_stat(abs)
     if attr then
         if attr.is_dir then
-            -- Already a directory — idempotent, return 200
+            ngx.log(ngx.INFO, "[fileapi] mkdir: already exists (dir): ", abs)
             return send_json(200, OK_JSON)
         else
+            ngx.log(ngx.WARN, "[fileapi] mkdir: path exists as file: ", abs)
             return send_json(409, err("conflict", "path exists as a regular file"))
         end
     end
 
     local ok, msg = mkdir_p(abs)
     if not ok then
+        ngx.log(ngx.ERR, "[fileapi] mkdir_p failed: ", abs, " err=", msg)
         return send_json(500, err("internal", msg or "mkdir failed"))
     end
 
+    ngx.log(ngx.INFO, "[fileapi] mkdir ok: ", abs)
     return send_json(200, OK_JSON)
 end
 
@@ -465,8 +527,11 @@ function _M.handle_upload(webdav_root)
     local user_path = uri:match("^/api/upload(/?.*)$") or "/"
     if user_path == "" then user_path = "/" end
 
+    ngx.log(ngx.INFO, "[fileapi] upload: user_path=", user_path)
+
     local abs, e = resolve_path(webdav_root, user_path)
     if not abs then
+        ngx.log(ngx.WARN, "[fileapi] upload: resolve failed: ", e)
         return send_json(400, e)
     end
 
@@ -482,6 +547,7 @@ function _M.handle_upload(webdav_root)
 
     if not body then
         body_file = ngx.req.get_body_file()
+        ngx.log(ngx.DEBUG, "[fileapi] upload: body spooled to file: ", tostring(body_file))
     end
 
     -- Ensure parent directories exist
@@ -489,6 +555,7 @@ function _M.handle_upload(webdav_root)
     if parent == "" then parent = "/" end
     local ok_p, msg_p = mkdir_p(parent)
     if not ok_p then
+        ngx.log(ngx.ERR, "[fileapi] upload: mkdir_p failed for parent: ", parent, " err=", msg_p)
         return send_json(500, err("internal", "cannot create parent directory: " .. (msg_p or "")))
     end
 
@@ -498,11 +565,13 @@ function _M.handle_upload(webdav_root)
         -- Body was spooled to a temp file — copy it
         local src, serr = io.open(body_file, "rb")
         if not src then
+            ngx.log(ngx.ERR, "[fileapi] upload: cannot open body temp file: ", tostring(body_file), " err=", tostring(serr))
             return send_json(500, err("internal", "cannot open body temp file: " .. (serr or "")))
         end
         fh, ferr = io.open(abs, "wb")
         if not fh then
             src:close()
+            ngx.log(ngx.ERR, "[fileapi] upload: cannot create file: ", abs, " err=", tostring(ferr))
             return send_json(500, err("internal", "cannot create file: " .. (ferr or abs)))
         end
         while true do
@@ -515,6 +584,7 @@ function _M.handle_upload(webdav_root)
         -- Body is in memory (may be nil for empty upload)
         fh, ferr = io.open(abs, "wb")
         if not fh then
+            ngx.log(ngx.ERR, "[fileapi] upload: cannot create file: ", abs, " err=", tostring(ferr))
             return send_json(500, err("internal", "cannot create file: " .. (ferr or abs)))
         end
         if body and #body > 0 then
@@ -526,6 +596,7 @@ function _M.handle_upload(webdav_root)
 
     local written = do_stat(abs)
     local size    = written and written.size or 0
+    ngx.log(ngx.INFO, "[fileapi] upload ok: ", abs, " size=", size)
     return send_json(200, string.format('{"ok":true,"size":%d}', size))
 end
 
