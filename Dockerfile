@@ -91,9 +91,10 @@ RUN set -eux \
     && mkdir -p "${LUALIB}/klib" \
     && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${LUALIB}/klib/" \
     \
-    # Symlink nginx binary into /usr/local/bin so it's always on PATH
-    # regardless of whether ./nginx/ is bind-mounted over the nginx directory
-    && ln -sf /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
+    # Move nginx binary to /usr/local/bin so it's always on PATH
+    # regardless of whether ./nginx/ is bind-mounted over the nginx directory.
+    # Using mv (not symlink) so bind-mounting ./nginx/ cannot shadow it.
+    && mv /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
     \
     # Cleanup
     && apk del .build-deps \
