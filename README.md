@@ -205,19 +205,19 @@ docker-openresty-tool/
 
 ### 手动集成的库
 
-| 库名 | 来源 / 用途 |
-|------|------------|
-| `lua-resty-acme` | Let's Encrypt ACME 协议客户端 |
-| `lua-resty-openssl` | OpenSSL FFI 绑定 |
-| `lua-resty-lrucache` | LRU 缓存（openresty 官方） |
-| `lua-resty-string` | 字符串工具（openresty 官方） |
-| `lua-resty-klib` | yorkane 自研通用工具库（构建时自动从 GitHub 拉取） |
-| `lua-resty-cookie` | Cookie 解析 |
-| `lua-resty-hmac` | HMAC 签名验证 |
-| `lua-resty-shell` | 非阻塞 Shell 执行 |
-| `lua-resty-ctxvar` | 请求上下文变量封装（内置） |
-| `luajit-iconv` | libiconv 字符编码转换 |
-| `lfs_ffi` | 文件系统操作（FFI） |
+| 库名 | 安装路径 | 来源 / 用途 |
+|------|----------|------------|
+| `lua-resty-acme` | lualib (base 镜像) | Let's Encrypt ACME 协议客户端 |
+| `lua-resty-openssl` | lualib (base 镜像) | OpenSSL FFI 绑定 |
+| `lua-resty-lrucache` | lualib (base 镜像) | LRU 缓存（openresty 官方） |
+| `lua-resty-string` | lualib (base 镜像) | 字符串工具（openresty 官方） |
+| `lua-resty-klib` | `/usr/local/openresty/lualib/klib/` | yorkane 自研通用工具库，`require('klib.dump')` |
+| `lua-resty-cookie` | lualib/resty/ | Cookie 解析 |
+| `lua-resty-hmac` | lualib/resty/ | HMAC 签名验证 |
+| `lua-resty-shell` | lualib/resty/ | 非阻塞 Shell 执行 |
+| `lua-resty-ctxvar` | `/usr/local/openresty/lualib/resty/ctxvar.lua` | 请求上下文变量封装，`require('resty.ctxvar')` |
+| `luajit-iconv` | luajit/share/lua/5.1/ | libiconv 字符编码转换 |
+| `lfs_ffi` | luajit/share/lua/5.1/ | 文件系统操作（FFI） |
 
 ---
 
@@ -1001,17 +1001,18 @@ include default_app/main.conf;
 
 ---
 
-### Fix 2: `main.conf` 依赖未安装的 `lua-resty-klib`
+### Fix 2: `lua-resty-klib` 和 `lua-resty-ctxvar` 安装路径修正
 
-**问题**：`main.conf` 的 `rewrite_by_lua_block` 中调用了 `require('klib.dump').logs()`，但 `lua-resty-klib` 在工具镜像中未默认安装，导致首页请求返回 500。
+**问题**：`lua-resty-klib`（`require('klib.*')`）和 `lua-resty-ctxvar`（`require('resty.ctxvar')`）之前未安装到 OpenResty 的标准 `lualib/` 路径，导致 `require` 失败。
 
-**修复**：注释掉该调试行（该行仅为请求头日志打印，不影响核心功能）：
+**修复**：Dockerfile 现在将两者安装到正确路径：
 
-```lua
--- require('klib.dump').logs(ngx.req.get_headers())  -- klib not bundled in this build
-```
+| 库 | 安装路径 |
+|----|---------|
+| `lua-resty-klib` | `/usr/local/openresty/lualib/klib/` |
+| `lua-resty-ctxvar` | `/usr/local/openresty/lualib/resty/ctxvar.lua` |
 
-如需启用，请先手动安装 `lua-resty-klib`，参见[预安装 Lua 库](#预安装-lua-库)章节。
+两者均在镜像构建时自动从 GitHub 拉取（`yorkane/lua-resty-klib` 和 `yorkane/lua-resty-ctxvar`）。
 
 ---
 

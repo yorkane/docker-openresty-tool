@@ -18,9 +18,6 @@ ENV TZ=Asia/Shanghai \
 ENV LUA_PATH="/usr/local/openresty/nginx/lua/?.lua;/usr/local/openresty/nginx/lua/?/init.lua;${LUA_PATH}" \
     LUA_CPATH="/usr/local/openresty/nginx/lua/?.so;${LUA_CPATH}"
 
-# Copy local ctxvar module for installation
-COPY nginx/lua/resty/ctxvar.lua /tmp/lua-resty-ctxvar/
-
 # Install extra Lua libraries and runtime deps on top of the base image
 RUN set -eux \
     # Optional: switch to CN mirror
@@ -57,21 +54,34 @@ RUN set -eux \
     && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
     && luarocks install lua-vips \
     \
-    # Download raw Lua files (into luarocks tree, consistent with luarocks install)
+    # Download raw Lua files into OpenResty's luajit share path (for require() without prefix)
     && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
+    # OpenResty lualib path — the canonical location for resty.* / klib.* modules
+    && LUALIB=/usr/local/openresty/lualib \
     && cd "${LUA_SHARE}" \
     && wget -q 'https://raw.githubusercontent.com/semyon422/luajit-iconv/master/init.lua' -O libiconv.lua \
     && wget -q 'https://raw.githubusercontent.com/spacewander/luafilesystem/master/lfs_ffi.lua' \
     && mkdir -p resty && cd resty \
     && wget -q 'https://raw.githubusercontent.com/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua' \
     && wget -q 'https://raw.githubusercontent.com/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua' \
-    && cp /tmp/lua-resty-ctxvar/ctxvar.lua . \
     \
-    # Download lua-resty-klib (yorkane's custom lib)
+    # Install lua-resty-ctxvar (yorkane/lua-resty-ctxvar) → lualib/resty/ctxvar.lua
     && cd /tmp && rm -rf _tmp_ && mkdir _tmp_ \
+    && wget -qO- 'https://github.com/yorkane/lua-resty-ctxvar/archive/refs/heads/main.tar.gz' \
+        | tar xz -C _tmp_ \
+    && mkdir -p "${LUALIB}/resty" \
+    && cp _tmp_/lua-resty-ctxvar-main/lib/resty/ctxvar.lua "${LUALIB}/resty/ctxvar.lua" \
+    \
+    # Install lua-resty-klib (yorkane/lua-resty-klib) → lualib/klib/*.lua
+    && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- 'https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz' \
         | tar xz -C _tmp_ \
-    && find _tmp_ -type d -name lib -exec sh -c 'cp -r "$1"/. "${LUA_SHARE}/"' _ {} \; \
+    && mkdir -p "${LUALIB}/klib" \
+    && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${LUALIB}/klib/" \
+    \
+    # Symlink nginx binary into /usr/local/bin so it's always on PATH
+    # regardless of whether ./nginx/ is bind-mounted over the nginx directory
+    && ln -sf /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
     \
     # Cleanup
     && apk del .build-deps \
