@@ -9,10 +9,10 @@
  *
  * Keyboard (preview open):
  *   ↑/←  prev item   ↓/→  next item   Esc  close   Del  delete
- *   Home  first item   End  last item   (no wrap-around, shows OSD at boundaries)
- *   F  toggle browser fullscreen
+ *   Home  first item   End  last item   (no wrap-around at boundaries)
+ *   F  toggle browser fullscreen  (toolbar fully hides when fullscreen)
  *   V  toggle fit ↔ rotate-long-edge
- *   O  original size
+ *   O  toggle fit ↔ original size
  *   Space  play/pause (video/audio)
  *   M  toggle mute (video/audio)
  *   ←/→  seek ±5s   Ctrl+←/→  seek ±30s   (video/audio only)
@@ -98,9 +98,11 @@
   (function () {
     var s = document.createElement('style');
     s.textContent = [
-      /* Toolbar auto-hide */
-      '#__or_tb{opacity:.12;transition:opacity .25s;}',
+      /* Toolbar auto-hide: 12% in normal, fully hidden in fullscreen */
+      '#__or_tb{opacity:.12;transition:opacity .3s;}',
       '#__or_tb:hover,#__or_tb:focus-within{opacity:1;}',
+      '#__or_tb.fullscreen{opacity:0;}',
+      '#__or_tb.fullscreen:hover,#__or_tb.fullscreen:focus-within{opacity:1;}',
       /* Toolbar buttons – bigger for touch */
       '#__or_tb button,#__or_tb select{',
         'background:none;border:none;cursor:pointer;',
@@ -564,6 +566,14 @@
     }
   }
 
+  /* Sync toolbar opacity class whenever fullscreen state changes */
+  function onFullscreenChange() {
+    var isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    tb.classList.toggle('fullscreen', isFs);
+  }
+  document.addEventListener('fullscreenchange',       onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
   /* ── Mute toggle ── */
   function toggleMute() {
     if (!currentMediaEl) return;
@@ -735,8 +745,9 @@
         case 'v': case 'V':
           cycleViewFitRotate(); break;
 
-        case 'o': case 'O': setView('orig');   break;
-        case 'r': case 'R': setView('rotate'); break;
+        /* O → toggle fit ↔ original size */
+        case 'o': case 'O':
+          setView(viewMode === 'orig' ? 'fit' : 'orig'); break;
 
         case 'm': case 'M':
           toggleMute(); break;
