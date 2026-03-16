@@ -9,11 +9,13 @@
  *
  * Keyboard (preview open):
  *   ↑/←  prev item   ↓/→  next item   Esc  close   Del  delete
- *   F  fit   O  orig   R  rotate
+ *   Home  first item   End  last item   (no wrap-around, shows OSD at boundaries)
+ *   F  toggle browser fullscreen
+ *   V  toggle fit ↔ rotate-long-edge
+ *   O  original size
  *   Space  play/pause (video/audio)
  *   M  toggle mute (video/audio)
  *   ←/→  seek ±5s   Ctrl+←/→  seek ±30s   (video/audio only)
- *   0-9  speed presets via numpad (optional – see SPEED_KEYS)
  *
  * Touch (video):
  *   Press-and-hold on video → 2× speed while held, restore on release
@@ -278,8 +280,29 @@
   /* ────────────────────────────────────────────
      Open / close
   ──────────────────────────────────────────── */
+
+  /* openAt: unconditional jump (wraps modulo, used internally e.g. after delete) */
   function openAt(idx) {
-    cur = (idx + items.length) % items.length;
+    cur = ((idx % items.length) + items.length) % items.length;
+    normalSpeed = 1;
+    render();
+    ov.style.display = 'block';
+    document.body.style.overflow = 'hidden';
+    hideFocusBox();
+    preloadAround(cur);
+  }
+
+  /* navTo: user-driven navigation — shows OSD at boundaries, no wrap-around */
+  function navTo(idx) {
+    if (idx < 0) {
+      showSpeedOsd('⬆ 已是第一个');
+      return;
+    }
+    if (idx >= items.length) {
+      showSpeedOsd('⬇ 已是最后一个');
+      return;
+    }
+    cur = idx;
     normalSpeed = 1;
     render();
     ov.style.display = 'block';
@@ -518,10 +541,28 @@
     }).catch(function (err) { alert('❌ 请求失败：' + err); });
   }
 
-  /* ────────────────────────────────────────────
-     View mode switch
-  ──────────────────────────────────────────── */
+  /* ── View mode switch ── */
   function setView(m) { viewMode = m; render(); }
+
+  /* ── V key: toggle between fit ↔ rotate-long-edge ── */
+  function cycleViewFitRotate() {
+    setView(viewMode === 'rotate' ? 'fit' : 'rotate');
+  }
+
+  /* ── F key: toggle browser fullscreen ── */
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      (ov.requestFullscreen || ov.webkitRequestFullscreen || ov.mozRequestFullScreen
+        ? (ov.requestFullscreen || ov.webkitRequestFullscreen || ov.mozRequestFullScreen).call(ov)
+        : document.documentElement.requestFullscreen && document.documentElement.requestFullscreen()
+      );
+    } else {
+      (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen
+        ? (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document)
+        : null
+      );
+    }
+  }
 
   /* ── Mute toggle ── */
   function toggleMute() {
@@ -618,8 +659,8 @@
   document.getElementById('__or_vfit').onclick  = function () { setView('fit');    };
   document.getElementById('__or_vorig').onclick = function () { setView('orig');   };
   document.getElementById('__or_vrot').onclick  = function () { setView('rotate'); };
-  document.getElementById('__or_prev').onclick  = function () { openAt(cur - 1);  };
-  document.getElementById('__or_next').onclick  = function () { openAt(cur + 1);  };
+  document.getElementById('__or_prev').onclick  = function () { navTo(cur - 1);  };
+  document.getElementById('__or_next').onclick  = function () { navTo(cur + 1);  };
   document.getElementById('__or_del').onclick   = doDelete;
   document.getElementById('__or_cls').onclick   = closeOv;
 
@@ -628,11 +669,11 @@
     setSpeed(parseFloat(this.value));
   });
 
-  /* Click on image area → next; click on bare overlay → close */
+  /* Click on image area → next (no wrap); click on bare overlay → close */
   mediaEl.addEventListener('click', function (e) {
     if (e.target && e.target.tagName === 'VIDEO') return;
     if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'DIV')) return;
-    openAt(cur + 1);
+    navTo(cur + 1);
   });
 
   ov.addEventListener('click', function (e) { if (e.target === ov) closeOv(); });
@@ -650,19 +691,24 @@
         case 'Escape':
           closeOv(); showFocusBox(); break;
 
-        /* Image/media navigation */
+        /* Image/media navigation — no wrap-around */
         case 'ArrowUp':
-          openAt(cur - 1); e.preventDefault(); break;
+          navTo(cur - 1); e.preventDefault(); break;
         case 'ArrowDown':
-          openAt(cur + 1); e.preventDefault(); break;
+          navTo(cur + 1); e.preventDefault(); break;
 
-        /* Left/Right: seek for video/audio, prev/next for images */
+        case 'Home':
+          navTo(0); e.preventDefault(); break;
+        case 'End':
+          navTo(items.length - 1); e.preventDefault(); break;
+
+        /* Left/Right: seek for video/audio; prev/next for images (no wrap) */
         case 'ArrowLeft':
           if (hasMedia && !IMG[ext(items[cur].href)]) {
             e.preventDefault();
             seekBy(e.ctrlKey ? -30 : -5);
           } else {
-            openAt(cur - 1); e.preventDefault();
+            navTo(cur - 1); e.preventDefault();
           }
           break;
         case 'ArrowRight':
@@ -670,7 +716,7 @@
             e.preventDefault();
             seekBy(e.ctrlKey ? 30 : 5);
           } else {
-            openAt(cur + 1); e.preventDefault();
+            navTo(cur + 1); e.preventDefault();
           }
           break;
 
@@ -681,7 +727,14 @@
         case 'Delete':
           doDelete(); break;
 
-        case 'f': case 'F': setView('fit');    break;
+        /* F → browser fullscreen */
+        case 'f': case 'F':
+          e.preventDefault(); toggleFullscreen(); break;
+
+        /* V → toggle fit ↔ rotate-long-edge */
+        case 'v': case 'V':
+          cycleViewFitRotate(); break;
+
         case 'o': case 'O': setView('orig');   break;
         case 'r': case 'R': setView('rotate'); break;
 
