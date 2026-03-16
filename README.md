@@ -52,6 +52,8 @@
 - [已知问题与修复记录](#已知问题与修复记录)
 - [许可证](#许可证)
 
+> 📋 **键盘快捷键完整参考：[shortcuts.md](shortcuts.md)**
+
 ---
 
 ## 项目简介
@@ -123,6 +125,7 @@ docker-openresty-tool/
 ├── LICENSE                  # MIT 许可证
 ├── README.md
 ├── api.md                   # HTTP JSON API 完整接口文档 ★
+├── shortcuts.md             # 键盘快捷键完整参考 ★
 ├── test/
 │   └── sanity_test.sh       # Sanity 测试脚本（113 个用例）
 └── nginx/                   # 挂载到容器 /usr/local/openresty/nginx
@@ -149,7 +152,7 @@ docker-openresty-tool/
         ├── init_worker.lua  # init_worker_by_lua 入口
         ├── mocks.lua        # Mock 接口处理器
         ├── ngx_mock.lua     # Nginx Mock 工具模块
-        ├── __or_preview.js  # 媒体预览前端脚本（图片/视频/音频全屏预览）
+        ├── __or_preview.js  # 媒体预览前端脚本（图片/视频/音频全屏预览，键盘导航）→ 详见 shortcuts.md
         ├── resty/           # 自定义 resty 库
         │   └── ctxvar.lua   # 请求上下文变量封装
         └── lib/             # 内置 Lua 库
@@ -177,8 +180,7 @@ docker-openresty-tool/
 | **Vips 图片处理（新）** | 动态裁切、缩放、格式转换（libvips） | 访问 `/img/<path>?w=300&fmt=webp` |
 | **目录 JSON API（新）** | 列出目录/ZIP 内容，支持分页排序，返回 JSON | `GET /api/ls/<path>`，详见 [api.md](api.md) |
 | **文件管理 API（新）** | 删除、移动/改名、新建目录、上传文件 | `DELETE/POST /api/rm、/api/move、/api/mkdir、/api/upload`，详见 [api.md](api.md) |
-| **媒体预览注入** | 为所有 HTML 目录页自动注入👁预览按钮，支持图片/视频/音频全屏预览、键盘快捷键、删除 | 自动生效，无需配置；支持三种视图模式：适应全屏（Fit）、原始大小（Orig）、长边旋转（Rotate），快捷键 F/O/R 切换 |
-| **视图模式** | 预览时切换图片显示方式：Fit（全屏铺满）、Orig（1:1原始像素）、Rotate（竖版图自动旋转横屏显示） | 预览界面点击 toolbar 按钮或按快捷键 F/O/R 切换 |
+| **媒体预览注入** | 为所有 HTML 目录页自动注入预览按钮，支持图片/视频/音频全屏预览、键盘快捷键导航、删除；三种视图模式：Fit / Orig / Rotate | 自动生效，无需配置；完整快捷键见 [shortcuts.md](shortcuts.md) |
 | **FancyIndex** | 美观的目录浏览页面 | 在 location 中启用 `fancyindex on` |
 | **Wake-on-LAN** | 通过 HTTP 接口远程唤醒局域网设备 | 调用 `lib/wol.lua` |
 | **Mock 接口** | 快速返回 JSON/文本模拟响应 | 访问 `/mock/` 路径 |
