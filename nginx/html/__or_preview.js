@@ -18,7 +18,10 @@
  * Touch (video):
  *   Press-and-hold on video → 2× speed while held, restore on release
  *
- * WebDAV links: all non-media file/dir links open in a new tab.
+ * Link behaviour:
+ *   - Previewable media files (img/vid/aud): clicking the text link opens in new tab;
+ *     clicking the preview icon (🖼️/▶️/🎵) opens the overlay (unaffected).
+ *   - Directories and non-media files: click goes to the href normally (same tab).
  */
 (function () {
   'use strict';
@@ -239,15 +242,16 @@
       if (!href || href.startsWith('?') || href === '../') return;
       var abs = new URL(href, location.href).pathname;
 
-      /* ① All links open in new tab (WebDAV client opens the link, browser
-            opens a preview in a new window so WebDAV connection is unaffected) */
-      a.target = '_blank';
-      a.rel    = 'noopener noreferrer';
-
       /* Mark for focus-box */
       a.dataset.listIdx = String(aIdx);
 
       if (!isMedia(abs)) return;
+
+      /* ① Only previewable media text-links open in a new tab.
+            The preview icon button calls openAt() directly, so it is unaffected.
+            Directories and non-media files follow their href normally (same tab). */
+      a.target = '_blank';
+      a.rel    = 'noopener noreferrer';
 
       var idx = items.length;
       items.push({ href: abs, name: decodeURIComponent(abs.split('/').pop()) });
