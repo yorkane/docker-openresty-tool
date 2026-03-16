@@ -865,7 +865,11 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 # 使用官方基础镜像（推荐）
 docker build --platform linux/amd64 -t yorkane/docker-openresty-tool:latest .
 
-# 国内加速（切换 USTC 镜像源）
+# 国内加速（中国大陆网络推荐）
+# USE_CN_MIRROR=1 同时切换以下三个下载源：
+#   apk     → USTC (mirrors.ustc.edu.cn)
+#   luarocks → luarocks.cn  (支流科技代理)
+#   GitHub  → ghfast.top 反代  (raw 文件 + tar.gz 包)
 docker build --platform linux/amd64 \
   --build-arg USE_CN_MIRROR=1 \
   -t yorkane/docker-openresty-tool:latest .

@@ -20,9 +20,21 @@ ENV LUA_PATH="/usr/local/openresty/nginx/lua/?.lua;/usr/local/openresty/nginx/lu
 
 # Install extra Lua libraries and runtime deps on top of the base image
 RUN set -eux \
-    # Optional: switch to CN mirror
+    # ── Mirror selection ──────────────────────────────────────────────────────
+    # USE_CN_MIRROR=1  switches ALL download sources to CN-accessible mirrors:
+    #   apk      → USTC (mirrors.ustc.edu.cn)
+    #   luarocks → luarocks.cn  (proxy by API7/APISIX team)
+    #   GitHub   → ghfast.top reverse-proxy  (raw + archive downloads)
+    # Leave USE_CN_MIRROR empty for international builds.
+    # ──────────────────────────────────────────────────────────────────────────
+    && LUAROCKS_SERVER="https://luarocks.org" \
+    && GHRAW="https://raw.githubusercontent.com" \
+    && GHARCHIVE="https://github.com" \
     && if [ -n "${USE_CN_MIRROR}" ]; then \
         sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories; \
+        LUAROCKS_SERVER="https://luarocks.cn"; \
+        GHRAW="https://ghfast.top/https://raw.githubusercontent.com"; \
+        GHARCHIVE="https://ghfast.top/https://github.com"; \
     fi \
     # Timezone & convenience alias
     && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
@@ -44,37 +56,37 @@ RUN set -eux \
         vips-dev \
         git \
     \
-    # Install LuaRocks packages via base image's luarocks
-    && luarocks install luasocket \
-    && luarocks install luazip \
-    && luarocks install lua-resty-http \
-    && luarocks install lua-resty-redis-connector \
-    && luarocks install lua-resty-template \
-    && luarocks install lua-ffi-zlib \
+    # Install LuaRocks packages (--server selects manifest source)
+    && luarocks install luasocket         --server="${LUAROCKS_SERVER}" \
+    && luarocks install luazip            --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-resty-http    --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-resty-redis-connector --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-resty-template --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-ffi-zlib      --server="${LUAROCKS_SERVER}" \
     && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
-    && luarocks install lua-vips \
+    && luarocks install lua-vips          --server="${LUAROCKS_SERVER}" \
     \
-    # Download raw Lua files into OpenResty's luajit share path (for require() without prefix)
+    # Download raw Lua files into OpenResty's luajit share path
     && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
     # OpenResty lualib path — the canonical location for resty.* / klib.* modules
     && LUALIB=/usr/local/openresty/lualib \
     && cd "${LUA_SHARE}" \
-    && wget -q 'https://raw.githubusercontent.com/semyon422/luajit-iconv/master/init.lua' -O libiconv.lua \
-    && wget -q 'https://raw.githubusercontent.com/spacewander/luafilesystem/master/lfs_ffi.lua' \
+    && wget -q "${GHRAW}/semyon422/luajit-iconv/master/init.lua" -O libiconv.lua \
+    && wget -q "${GHRAW}/spacewander/luafilesystem/master/lfs_ffi.lua" \
     && mkdir -p resty && cd resty \
-    && wget -q 'https://raw.githubusercontent.com/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua' \
-    && wget -q 'https://raw.githubusercontent.com/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua' \
+    && wget -q "${GHRAW}/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua" \
+    && wget -q "${GHRAW}/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua" \
     \
     # Install lua-resty-ctxvar (yorkane/lua-resty-ctxvar) → lualib/resty/ctxvar.lua
     && cd /tmp && rm -rf _tmp_ && mkdir _tmp_ \
-    && wget -qO- 'https://github.com/yorkane/lua-resty-ctxvar/archive/refs/heads/main.tar.gz' \
+    && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-ctxvar/archive/refs/heads/main.tar.gz" \
         | tar xz -C _tmp_ \
     && mkdir -p "${LUALIB}/resty" \
     && cp _tmp_/lua-resty-ctxvar-main/lib/resty/ctxvar.lua "${LUALIB}/resty/ctxvar.lua" \
     \
     # Install lua-resty-klib (yorkane/lua-resty-klib) → lualib/klib/*.lua
     && rm -rf _tmp_ && mkdir _tmp_ \
-    && wget -qO- 'https://github.com/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz' \
+    && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz" \
         | tar xz -C _tmp_ \
     && mkdir -p "${LUALIB}/klib" \
     && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${LUALIB}/klib/" \
