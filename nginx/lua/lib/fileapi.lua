@@ -261,15 +261,16 @@ local function rmdir_recursive(path)
             local dtype  = entry.d_type
             local full   = path .. "/" .. name
             local is_dir
-            if dtype == DT_LNK then
-                is_dir = false
-                ngx.log(ngx.DEBUG, "[fileapi] entry symlink: ", full)
-            elseif dtype == DT_UNKNOWN then
-                ngx.log(ngx.INFO, "[fileapi] d_type=DT_UNKNOWN for: ", full, " — falling back to lstat")
-                is_dir = lstat_is_dir(full)
+            if dtype == DT_DIR then
+                -- Fast path: kernel told us it's definitely a directory
+                is_dir = true
+                ngx.log(ngx.DEBUG, "[fileapi] entry dtype=DT_DIR: ", full)
             else
-                is_dir = (dtype == DT_DIR)
-                ngx.log(ngx.DEBUG, "[fileapi] entry dtype=", tostring(dtype), " is_dir=", tostring(is_dir), " path=", full)
+                -- For DT_LNK, DT_UNKNOWN, or any other value (overlayfs, etc.)
+                -- always use lstat to get the ground truth.
+                is_dir = lstat_is_dir(full)
+                ngx.log(ngx.DEBUG, "[fileapi] entry dtype=", tostring(dtype),
+                        " lstat is_dir=", tostring(is_dir), " path=", full)
             end
             children[#children+1] = { name = name, is_dir = is_dir }
         end
