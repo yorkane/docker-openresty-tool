@@ -276,6 +276,13 @@
     if (items.length > 0) {
       focusIdx = 0;
       setTimeout(showFocusBox, 100);
+    } else {
+      /* No media files, but there may still be dirs/other files to navigate */
+      var anyLinks = getAllLinks();
+      if (anyLinks.length > 0) {
+        focusIdx = 0;
+        setTimeout(showFocusBox, 100);
+      }
     }
   }
 
@@ -663,6 +670,43 @@
     if (lastSlash > 0) location.href = path.substring(0, lastSlash + 1) || '/';
   }
 
+  /* ── Delete focused item in index view (file or directory) ── */
+  function deleteFocused() {
+    var links = getAllLinks();
+    if (!links.length || focusIdx < 0 || focusIdx >= links.length) return;
+    var link  = links[focusIdx];
+    var href  = link.getAttribute('href');
+    if (!href || href.startsWith('?') || href === '../') return;
+
+    var abs  = new URL(href, location.href).pathname;
+    var name = decodeURIComponent(abs.replace(/\/$/, '').split('/').pop()) || abs;
+    var isDir = abs.endsWith('/');
+
+    if (!confirm('🗑️ 确认删除' + (isDir ? '目录' : '文件') + '？\n\n' + name + (isDir ? '\n\n⚠️ 目录下所有内容将一并删除' : ''))) return;
+
+    fetch('/api/rm' + abs, { method: 'DELETE' }).then(function (r) {
+      if (r.ok) {
+        /* Remove the table row (or list item) containing the link */
+        var row = link.closest('tr') || link.closest('li') || link.parentNode;
+        if (row && row !== document.body) row.remove();
+        /* Also remove any sibling preview button */
+        var prevBtn = link.previousSibling;
+        if (prevBtn && prevBtn.classList && prevBtn.classList.contains('__or_preview_btn')) prevBtn.remove();
+        /* Re-index remaining links */
+        var remaining = getAllLinks();
+        if (!remaining.length) { hideFocusBox(); return; }
+        focusIdx = Math.min(focusIdx, remaining.length - 1);
+        updateFocusBox(remaining[focusIdx]);
+      } else {
+        r.text().then(function (body) {
+          var msg = '';
+          try { msg = JSON.parse(body).message || ''; } catch (ex) {}
+          alert('❌ 删除失败（HTTP ' + r.status + '）' + (msg ? '\n' + msg : ''));
+        });
+      }
+    }).catch(function (err) { alert('❌ 请求失败：' + err); });
+  }
+
   /* ────────────────────────────────────────────
      Wire toolbar events
   ──────────────────────────────────────────── */
@@ -760,6 +804,7 @@
         case 'ArrowUp':   e.preventDefault(); moveFocus(-1); break;
         case 'ArrowDown': e.preventDefault(); moveFocus(1);  break;
         case 'Enter':     e.preventDefault(); activateFocus(); break;
+        case 'Delete':    e.preventDefault(); deleteFocused(); break;
         case 'b': case 'B': goBack(); break;
       }
     }
