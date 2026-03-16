@@ -292,7 +292,10 @@ services:
     volumes:
       - ./data:/webdav              # WebDAV 数据目录
       - ./data:/data                # nginx 临时文件目录
-      - ./nginx:/usr/local/openresty/nginx  # 挂载配置，支持热更新
+      # ⚠️ 不要挂整个 ./nginx:/usr/local/openresty/nginx —— 会覆盖 sbin/ 导致 nginx 找不到
+      # 按需只挂子目录：
+      - ./nginx/conf/default_app:/usr/local/openresty/nginx/conf/default_app  # 自定义 location
+      - ./nginx/lua:/usr/local/openresty/nginx/lua                             # 自定义 Lua 脚本
     restart: unless-stopped
     ports:
       - "5080:80"
@@ -306,7 +309,6 @@ docker run -d \
   -p 5080:80 \
   -v $(pwd)/data:/webdav \
   -v $(pwd)/data:/data \
-  -v $(pwd)/nginx:/usr/local/openresty/nginx \
   -e NGX_OVERWRITE_CONFIG=true \
   -e NGX_LOG_LEVEL=warn \
   --entrypoint sh \
@@ -411,7 +413,7 @@ docker run -d \
   -e OR_ACME=true \
   -e NGX_HOST=example.com \
   -p 80:80 -p 443:443 \
-  -v $(pwd)/nginx:/usr/local/openresty/nginx \
+  -v $(pwd)/nginx/conf/default_app:/usr/local/openresty/nginx/conf/default_app \
   yorkane/docker-openresty-tool:latest
 ```
 

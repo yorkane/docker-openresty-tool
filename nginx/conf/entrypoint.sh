@@ -71,9 +71,10 @@ end
 return _M
 ' >> env.lua
 
+NGX_BIN=/usr/local/openresty/bin/nginx
 if [ ! -n "$1" ]; then
 echo 'Starting nginx!'
-nginx -g 'daemon off;'
+$NGX_BIN -g 'daemon off;'
 else
 exec $@
 fi
