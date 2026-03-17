@@ -231,26 +231,6 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 #osd.show { opacity: 1; }
 
-/* ─── Confirm Dialog ─── */
-#confirm-overlay {
-  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7);
-  z-index: 1000; align-items: center; justify-content: center;
-}
-#confirm-overlay.show { display: flex; }
-#confirm-box {
-  background: var(--bg2); border: 1px solid var(--border);
-  border-radius: 12px; padding: 24px 28px; max-width: 320px; width: 90%;
-  text-align: center;
-}
-#confirm-box h3 { font-size: 16px; margin-bottom: 8px; }
-#confirm-box p { color: var(--text2); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
-#confirm-box .confirm-btns { display: flex; gap: 10px; }
-#confirm-box .confirm-btns button {
-  flex: 1; height: 38px; border-radius: 8px; border: none;
-  font-size: 14px; cursor: pointer; font-weight: 500;
-}
-#confirm-box .confirm-btns .btn-cancel { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
-#confirm-box .confirm-btns .btn-ok { background: var(--danger); color: #fff; }
 
 /* ─── Loading skeleton ─── */
 .skeleton {
@@ -316,17 +296,6 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   </div>
 </div>
 
-<!-- ─── Confirm Dialog ─── -->
-<div id="confirm-overlay">
-  <div id="confirm-box">
-    <h3 id="confirm-title">确认删除</h3>
-    <p id="confirm-msg">此操作不可撤销</p>
-    <div class="confirm-btns">
-      <button class="btn-cancel" id="confirm-cancel">取消</button>
-      <button class="btn-ok" id="confirm-ok">删除</button>
-    </div>
-  </div>
-</div>
 
 <!-- ─── OSD ─── -->
 <div id="osd"></div>
@@ -496,18 +465,10 @@ async function fetchCoverItem(path) {
 }
 
 /* ═══════════════════════════════════════════════════
-   CONFIRM DIALOG
+   CONFIRM DIALOG — uses native window.confirm (Enter = OK)
 ═══════════════════════════════════════════════════ */
-let _confirmResolve = null;
-const confirmOverlay = document.getElementById('confirm-overlay');
-document.getElementById('confirm-cancel').onclick = () => { confirmOverlay.classList.remove('show'); _confirmResolve?.(false); };
-document.getElementById('confirm-ok').onclick = () => { confirmOverlay.classList.remove('show'); _confirmResolve?.(true); };
-
 function showConfirm(title, msg) {
-  document.getElementById('confirm-title').textContent = title;
-  document.getElementById('confirm-msg').textContent = msg;
-  confirmOverlay.classList.add('show');
-  return new Promise(r => { _confirmResolve = r; });
+  return Promise.resolve(window.confirm(title + '\n\n' + msg));
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1136,10 +1097,11 @@ const Reader = {
     const item = this._images[this._idx];
     if (!item) return;
 
-    const confirmed = await showConfirm('删除图片', `删除 "${item.name}"？此操作不可撤销。`);
-    if (!confirmed) return;
+    if (!window.confirm(`删除图片\n\n删除 "${item.name}"？此操作不可撤销。`)) return;
 
-    const filePath = joinPath(this._path, item.name);
+    // item._path is the actual directory containing the file (may be a sub-dir)
+    const fileDir = item._path || this._path;
+    const filePath = joinPath(fileDir, item.name);
     try {
       await apiRm(filePath);
       this._images.splice(this._idx, 1);
