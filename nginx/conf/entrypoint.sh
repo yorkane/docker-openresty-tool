@@ -73,10 +73,10 @@ end
 return _M
 ' >> env.lua
 
-NGX_BIN=/usr/local/bin/nginx
+# nginx is on PATH (copied from OpenResty sbin to /usr/local/bin during image build)
 if [ ! -n "$1" ]; then
 echo 'Starting nginx!'
-$NGX_BIN -g 'daemon off;'
+nginx -g 'daemon off;'
 else
 exec $@
 fi
