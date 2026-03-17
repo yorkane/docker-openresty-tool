@@ -1,0 +1,98 @@
+# Dockerfile.minimal - Minimal image without image processing
+# For use when only basic file serving is needed (no resize/crop/format conversion)
+
+ARG BASE_IMAGE="ghcr.io/yorkane/openresty-base:latest"
+FROM ${BASE_IMAGE}
+
+LABEL maintainer="yorkane"
+
+ARG USE_CN_MIRROR=""
+
+ENV TZ=Asia/Shanghai \
+    GID=1000 \
+    UID=1000
+
+ENV LUA_PATH="/usr/local/openresty/nginx/lua/?.lua;/usr/local/openresty/nginx/lua/?/init.lua;${LUA_PATH}" \
+    LUA_CPATH="/usr/local/openresty/nginx/lua/?.so;${LUA_CPATH}"
+
+RUN set -eux \
+    && LUAROCKS_SERVER="https://luarocks.org" \
+    && GHRAW="https://raw.githubusercontent.com" \
+    && GHARCHIVE="https://github.com" \
+    && if [ -n "${USE_CN_MIRROR}" ]; then \
+        sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories; \
+        LUAROCKS_SERVER="https://luarocks.cn"; \
+        GHRAW="https://ghfast.top/https://raw.githubusercontent.com"; \
+        GHARCHIVE="https://ghfast.top/https://github.com"; \
+    fi \
+    && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo Asia/Shanghai > /etc/timezone \
+    && echo 'ls -lta "$@"' > /usr/bin/ll && chmod 755 /usr/bin/ll \
+    && mkdir -p /data/cache/stale_cache/ && chmod a+rwx /data/ -R \
+    \
+    # Minimal runtime deps (NO vips, NO image processing)
+    && apk add --no-cache \
+        gnu-libiconv \
+        libarchive-tools \
+        zziplib-dev \
+    \
+    # Build deps for lua-vips - REMOVED (not needed)
+    # Runtime vips - REMOVED
+    \
+    # Install LuaRocks packages (no lua-vips)
+    && luarocks install luasocket         --server="${LUAROCKS_SERVER}" \
+    && luarocks install luazip            --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-resty-http    --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-resty-redis-connector --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-resty-template --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-ffi-zlib      --server="${LUAROCKS_SERVER}" \
+    \
+    # Download raw Lua files
+    && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
+    && LUALIB=/usr/local/openresty/lualib \
+    && cd "${LUA_SHARE}" \
+    && wget -q "${GHRAW}/semyon422/luajit-iconv/master/init.lua" -O libiconv.lua \
+    && wget -q "${GHRAW}/spacewander/luafilesystem/master/lfs_ffi.lua" \
+    && mkdir -p resty && cd resty \
+    && wget -q "${GHRAW}/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua" \
+    && wget -q "${GHRAW}/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua" \
+    && cd /tmp && rm -rf _tmp_ && mkdir _tmp_ \
+    && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-ctxvar/archive/refs/heads/main.tar.gz" \
+        | tar xz -C _tmp_ \
+    && mkdir -p "${LUALIB}/resty" \
+    && cp _tmp_/lua-resty-ctxvar-main/lib/resty/ctxvar.lua "${LUALIB}/resty/ctxvar.lua" \
+    && rm -rf _tmp_ && mkdir _tmp_ \
+    && wget -qO- "${GHARCHIVE}/thibaultcha/lua-resty-mlcache/archive/refs/heads/master.tar.gz" \
+        | tar xz -C _tmp_ \
+    && cp _tmp_/lua-resty-mlcache-master/lib/resty/mlcache.lua "${LUALIB}/resty/mlcache.lua" \
+    && rm -rf _tmp_ && mkdir _tmp_ \
+    && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz" \
+        | tar xz -C _tmp_ \
+    && mkdir -p "${LUALIB}/klib" \
+    && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${LUALIB}/klib/" \
+    && cp /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
+    \
+    && rm -rf /tmp/* \
+    && rm -rf /var/cache/apk/* \
+    && rm -rf /root/.cache/* \
+    && rm -rf /root/.luarocks/* \
+    && rm -rf /usr/local/share/man/* \
+    && rm -rf /usr/local/lib/pkgconfig/* \
+    && find /usr/local -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true \
+    && echo 'docker-openresty-tool-minimal built successfully'
+
+COPY ./nginx/ /usr/local/openresty/nginx/
+
+RUN chmod a+x /usr/local/openresty/nginx/lua/ -R \
+    && chmod a+x /usr/local/openresty/nginx/bins/ -R \
+    && chmod 755 /usr/local/openresty/nginx/conf/*.sh
+
+WORKDIR /usr/local/openresty/nginx
+
+ENTRYPOINT ["/usr/local/openresty/nginx/conf/entrypoint.sh"]
+
+STOPSIGNAL SIGQUIT
+
+# Build usage:
+#   docker build -f Dockerfile.minimal -t yorkane/docker-openresty-tool:minimal .
+# Expected size: ~80-100MB (no libvips/lua-vips)
