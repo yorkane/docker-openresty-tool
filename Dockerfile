@@ -112,9 +112,8 @@ RUN set -eux \
     && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${SITELIB}/klib/" \
     \
     # Copy nginx binary to /usr/local/bin so it's always on PATH
-    # regardless of whether ./nginx/ is bind-mounted over the nginx directory.
-    # Using cp (not mv) to keep the original OpenResty installation intact.
-    && cp /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
+    # Using mv to reduce image size (the original will be removed)
+    && mv /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
     \
     # Clean up build artifacts and caches to reduce image size
     && rm -rf /tmp/* \
