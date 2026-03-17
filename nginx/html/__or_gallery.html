@@ -188,12 +188,19 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   max-width: 100%; max-height: 100%;
   width: auto; height: auto;
   object-fit: contain;
+  user-select: none; -webkit-user-drag: none;
+  display: block;
 }
-/* Orig mode: natural size */
+/* Orig mode: natural size, scroll-to-zoom handled via JS transform */
 .page-img-wrap.orig {
   width: auto; height: auto; min-width: min-content;
+  transform-origin: top left;   /* JS overrides per-zoom */
 }
-.page-img-wrap.orig img { width: auto; height: auto; }
+.page-img-wrap.orig img {
+  width: auto; height: auto;
+  display: block;
+  user-select: none; -webkit-user-drag: none;
+}
 /* Rotate mode: rotate 90°, swap w/h logic */
 .page-img-wrap.rotate {
   width: 100%; height: 100%;
@@ -884,7 +891,12 @@ const Reader = {
   _touch: { startX: 0, startY: 0, startTime: 0 },
 
   // Drag state (orig mode pan)
-  _drag: { active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 },
+  _drag: { active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0, moved: false },
+
+  // Zoom state (orig mode wheel-to-zoom)
+  _scale: 1.0,
+  _SCALE_MIN: 0.1,
+  _SCALE_MAX: 10,
 
   init() {
     // Button wiring
@@ -938,6 +950,32 @@ const Reader = {
     }, { passive: true });
     this.canvas.addEventListener('touchend', () => { this._drag.active = false; }, { passive: true });
 
+    // ── Orig-mode wheel-to-zoom ────────────────────────────────────────────
+    this.canvas.addEventListener('wheel', e => {
+      if (!this.canvas.classList.contains('orig')) return;
+      e.preventDefault();
+
+      const delta = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      const newScale = Math.min(this._SCALE_MAX, Math.max(this._SCALE_MIN, this._scale * delta));
+      if (newScale === this._scale) return;
+
+      // Mouse position relative to canvas viewport
+      const rect = this.canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;  // mouse x in canvas viewport
+      const my = e.clientY - rect.top;
+
+      // World position under the mouse before scaling
+      const wx = (this.canvas.scrollLeft + mx) / this._scale;
+      const wy = (this.canvas.scrollTop  + my) / this._scale;
+
+      this._scale = newScale;
+      this._applyScale();
+
+      // After scaling, restore mouse-world alignment
+      this.canvas.scrollLeft = wx * this._scale - mx;
+      this.canvas.scrollTop  = wy * this._scale - my;
+    }, { passive: false });
+
     // Touch swipe (non-orig)
     this.el.addEventListener('touchstart', e => this._touchStart(e), { passive: true });
     this.el.addEventListener('touchend', e => this._touchEnd(e), { passive: true });
@@ -952,6 +990,7 @@ const Reader = {
     this._double = Settings.get('doublePages');
     this._rtl = Settings.get('rtl');
     this._viewMode = Settings.get('viewMode');
+    this._scale = 1.0;   // reset zoom on each open
     this._images = [];
     this._idx = 0;
 
@@ -1038,6 +1077,9 @@ const Reader = {
       this._appendPageImg(idx);
     }
 
+    // Apply zoom if in orig mode (scale persists across page turns)
+    if (this._viewMode === 'orig') this._applyScale();
+
     this._updatePageInfo();
     this._showToolbar(true);
 
@@ -1061,6 +1103,14 @@ const Reader = {
     img.src = item.url;
     wrap.appendChild(img);
     this.canvas.appendChild(wrap);
+  },
+
+  /** Apply current _scale to all orig-mode page wraps */
+  _applyScale() {
+    this.canvas.querySelectorAll('.page-img-wrap.orig').forEach(wrap => {
+      wrap.style.transform = `scale(${this._scale})`;
+      wrap.style.transformOrigin = 'top left';
+    });
   },
 
   _preload(idx) {
@@ -1112,6 +1162,8 @@ const Reader = {
     const modes = ['fit', 'orig'];
     const next = modes[(modes.indexOf(this._viewMode) + 1) % modes.length];
     this._viewMode = next;
+    // Reset zoom when entering orig mode
+    if (next === 'orig') this._scale = 1.0;
     Settings.set('viewMode', next);
     this._syncButtons();
     this._renderPage();
