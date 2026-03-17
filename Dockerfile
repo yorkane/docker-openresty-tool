@@ -102,7 +102,9 @@ RUN set -eux \
     && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- "${GHARCHIVE}/thibaultcha/lua-resty-mlcache/archive/refs/heads/master.tar.gz" \
     | tar xz -C _tmp_ \
+    && mkdir -p "${SITELIB}/resty" \
     && cp _tmp_/lua-resty-mlcache-master/lib/resty/mlcache.lua "${SITELIB}/resty/mlcache.lua" \
+    && ls -la "${SITELIB}/resty/" \
     \
     # Install lua-resty-klib (yorkane/lua-resty-klib) → site/lualib/klib/*.lua
     && rm -rf _tmp_ && mkdir _tmp_ \
