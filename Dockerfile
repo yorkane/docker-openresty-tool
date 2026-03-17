@@ -108,6 +108,14 @@ RUN set -eux \
     \
     # Cleanup
     && apk del .build-deps \
+    \
+    # Re-create libvips.so symlink removed by apk del vips-dev.
+    # lua-vips uses ffi.load("vips") which resolves to libvips.so on Linux.
+    # Alpine's runtime 'vips' package only ships libvips.so.42; the unversioned
+    # symlink lives in vips-dev and gets deleted with .build-deps.
+    && LIBVIPS_SO=$(ls /usr/lib/libvips.so.[0-9]* 2>/dev/null | sort -V | tail -1) \
+    && [ -n "${LIBVIPS_SO}" ] && ln -sf "${LIBVIPS_SO}" /usr/lib/libvips.so || true \
+    \
     && rm -rf /tmp/* /var/cache/apk /root/.cache \
     && echo 'docker-openresty-tool layer built successfully'
 
