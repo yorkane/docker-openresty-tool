@@ -441,29 +441,57 @@ async function apiRm(path) {
   return res.json();
 }
 
-/** Fetch ALL images in a path, handling pagination */
-async function fetchAllImages(path) {
+/**
+ * Fetch ALL images in a path, handling pagination.
+ * @param {string}  path      — directory or zip path
+ * @param {boolean} recursive — when true, descend into sub-directories (used for zip reader)
+ */
+async function fetchAllImages(path, recursive = false) {
   const PAGE = 200;
-  let page = 1, all = [];
+  let page = 1, all = [], subdirs = [];
   while (true) {
     const data = await apiLs(path, { page, page_size: PAGE });
-    all = all.concat(data.items.filter(it => it.type === 'file' && isImage(it.name)));
+    for (const it of data.items) {
+      if (it.type === 'file' && isImage(it.name)) {
+        all.push({ ...it, _path: path }); // keep original path for URL building
+      } else if (recursive && (it.type === 'dir')) {
+        subdirs.push(joinPath(path, it.name));
+      }
+    }
     if (data.page * data.page_size >= data.total || data.items.length === 0) break;
     page++;
   }
+  // Recurse into subdirs (BFS order → natural sort across levels)
+  for (const sub of subdirs) {
+    const subImgs = await fetchAllImages(sub, true);
+    all = all.concat(subImgs);
+  }
+  // naturalSort only by name within each dir (cross-dir order by discovery = dir sort)
   return naturalSort(all, 'name');
 }
 
-/** Fetch cover: get first page, find cover image */
+/** Fetch cover: get first page, find cover image; for zips recurse into subdirs */
 async function fetchCoverItem(path) {
   try {
     const data = await apiLs(path, { page: 1, page_size: 20 });
     let imgs = naturalSort(data.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
+    let coverPath = path; // the directory where the cover lives
+    // If no images at root but has subdirs, peek into first subdir (common cbz layout)
+    if (!imgs.length) {
+      const firstSubdir = naturalSort(data.items, 'name').find(it => it.type === 'dir');
+      if (firstSubdir) {
+        coverPath = joinPath(path, firstSubdir.name);
+        const sub = await apiLs(coverPath, { page: 1, page_size: 5 });
+        imgs = naturalSort(sub.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
+      }
+    }
     if (!imgs.length && data.total > 20) {
+      coverPath = path;
       const data2 = await apiLs(path, { page: 2, page_size: 20 });
       imgs = naturalSort(data2.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
     }
-    return pickCover(imgs);
+    const item = pickCover(imgs);
+    return item ? { item, coverPath } : null;
   } catch { return null; }
 }
 
@@ -798,25 +826,36 @@ const GalleryView = {
     const type = card.dataset.type;
     const img = card.querySelector('img');
 
-    const coverItem = await fetchCoverItem(path);
-    if (!coverItem) return;
+    const result = await fetchCoverItem(path);
+    if (!result) return;
+    const { item: coverItem, coverPath } = result;
 
     let url;
     if (isZip(type)) {
       // ZIP内封面走 /zip/ 路由，不能用 /img/ 做缩略图
-      url = zipFileUrl(path, coverItem.name);
+      // coverPath may be /foo/bar.cbz or /foo/bar.cbz/subdir
+      // Need internal path = everything after zip boundary in coverPath + / + name
+      const low = coverPath.toLowerCase();
+      let zipBoundary = -1;
+      for (const ext of ZIP_EXTS) {
+        const idx = low.indexOf('.' + ext);
+        if (idx !== -1) { zipBoundary = idx + ext.length + 1; break; }
+      }
+      const internalDir = zipBoundary > 0 ? coverPath.slice(zipBoundary).replace(/^\/+/, '') : '';
+      const internalPath = internalDir ? internalDir + '/' + coverItem.name : coverItem.name;
+      url = zipFileUrl(path, internalPath);
     } else {
       // 普通目录封面走 /img/ 做 vips 缩略图（360px 宽，cover 模式）
-      const rawUrl = fileUrl(path, coverItem.name);
-      // /img/ 路径：去掉开头的 / 拿到相对路径，再加 /img/ 前缀
+      const rawUrl = fileUrl(coverPath, coverItem.name);
       url = '/img' + rawUrl + '?w=360&h=504&fit=cover&q=82';
     }
 
     img.onload = () => { img.classList.remove('loading'); };
     img.onerror = () => {
       // vips 缩略图失败时回退到原图
-      if (img.src !== fileUrl(path, coverItem.name)) {
-        img.src = fileUrl(path, coverItem.name);
+      const fallback = fileUrl(coverPath, coverItem.name);
+      if (img.src !== fallback) {
+        img.src = fallback;
       } else {
         img.remove();
       }
@@ -929,17 +968,35 @@ const Reader = {
     this.canvas.querySelectorAll('.page-img-wrap').forEach(el => el.remove());
 
     try {
-      const rawImages = await fetchAllImages(path);
+      const rawImages = await fetchAllImages(path, isZipPath /* recursive inside zip */);
       if (!rawImages.length) {
         showOsd('没有找到图片', 2000);
         this.close();
         return;
       }
 
-      this._images = rawImages.map(it => ({
-        name: it.name,
-        url: isZipPath ? zipFileUrl(path, it.name) : fileUrl(path, it.name),
-      }));
+      this._images = rawImages.map(it => {
+        // For zip: it._path is the sub-dir inside the zip (or the zip root path itself)
+        // URL: /zip/<archivePath>/<relativeInternalPath>
+        if (isZipPath) {
+          // it._path = e.g. "/archives/book.cbz/ch1"  or  "/archives/book.cbz"
+          // it.name  = "page01.jpg"
+          // We need internal path = everything after the zip boundary in _path + / + name
+          const zipBoundary = (() => {
+            const low = it._path.toLowerCase();
+            for (const ext of ZIP_EXTS) {
+              const idx = low.indexOf('.' + ext);
+              if (idx !== -1) return idx + ext.length + 1; // position after ".ext"
+            }
+            return -1;
+          })();
+          let internalDir = zipBoundary > 0 ? it._path.slice(zipBoundary).replace(/^\/+/, '') : '';
+          const internalPath = internalDir ? internalDir + '/' + it.name : it.name;
+          return { name: it.name, url: zipFileUrl(path, internalPath) };
+        } else {
+          return { name: it.name, url: fileUrl(it._path, it.name) };
+        }
+      });
       this.spinner.style.display = 'none';
       this._renderPage();
     } catch (err) {
@@ -1267,9 +1324,11 @@ const App = {
   _fromName: null,   // name of the card we entered (to restore focus on back)
 
   async navigate(path, isPopState = false) {
-    // Determine if this path should open reader or gallery
-    const lower = path.toLowerCase();
-    const isZipPath = [...ZIP_EXTS].some(ext => lower.includes('.' + ext));
+    // Determine if this path should open reader or gallery.
+    // A path IS a zip if its LAST path segment ends with a zip extension.
+    // Use extOf() on the last segment to avoid false-positives from parent dir names.
+    const lastSeg = path.replace(/\/+$/, '').split('/').pop() || '';
+    const isZipPath = ZIP_EXTS.has(extOf(lastSeg));
 
     // Check if it's a leaf (zip = always reader; dir = try to determine by listing)
     // Strategy: for zip paths, always open reader.
