@@ -66,6 +66,14 @@ RUN set -eux \
     && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
     && luarocks install lua-vips          --server="${LUAROCKS_SERVER}" \
     \
+    # Copy lua-vips into OpenResty LuaJIT's built-in share path so it can be
+    # found without relying on lua_package_path pointing to /usr/local/share/lua/5.1/.
+    # LuaRocks installs lua-vips to /usr/local/share/lua/5.1/; OpenResty searches
+    # /usr/local/openresty/luajit/share/lua/5.1/ by default.
+    && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
+    && cp /usr/local/share/lua/5.1/vips.lua   "${LUA_SHARE}/vips.lua" \
+    && cp -r /usr/local/share/lua/5.1/vips/   "${LUA_SHARE}/vips/" \
+    \
     # Download raw Lua files into OpenResty's luajit share path
     && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
     # OpenResty lualib path — the canonical location for resty.* / klib.* modules
