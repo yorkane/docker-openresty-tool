@@ -336,7 +336,13 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 /* ═══════════════════════════════════════════════════
    UTILS
 ═══════════════════════════════════════════════════ */
-const IMG_EXTS = new Set(['jpg','jpeg','png','gif','webp','avif','bmp','jxl']);
+const IMG_EXTS = new Set([
+  'jpg','jpeg','jfif','jxl','jp2','jpx',   // JPEG family
+  'png','gif','webp','avif','bmp','svg',    // common web
+  'tiff','tif',                             // TIFF
+  'heif','heic',                            // Apple HEIF
+  'ico','cur',                              // icon formats
+]);
 const ZIP_EXTS = new Set(['zip','cbz','epub']);
 const COVER_RE = /^(\d{0,6}[-_\s]?)cover/i;
 
