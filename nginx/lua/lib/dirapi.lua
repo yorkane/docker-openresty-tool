@@ -85,129 +85,16 @@ local function find_zip_boundary(s)
 end
 
 -- ──────────────────────────────────────────────────────────
--- FFI: opendir / readdir / closedir / stat
--- Supports both x86_64 and aarch64 Linux (musl / glibc).
---
--- x86_64  struct stat layout (kernel asm/stat.h):
---   dev(8) ino(8) nlink(8) mode(4) uid(4) gid(4) pad0(4)
---   rdev(8) size(8) blksize(8) blocks(8)
---   atime(8) atime_ns(8) mtime(8) mtime_ns(8) ctime(8) ctime_ns(8)
---   Offsets: mode=16(WRONG on arm) → actually mode=24 on x86_64!
---   Correct x86_64: dev=0 ino=8 nlink=16 mode=24 uid=28 gid=32
---                   rdev=40 size=48 blksize=56 blocks=64
---                   atime=72 mtime=88 ctime=104
---
--- aarch64 struct stat layout (asm-generic/stat.h):
---   dev(8) ino(8) mode(4) nlink(4) uid(4) gid(4) rdev(8) pad1(8)
---   size(8) blksize(4) pad2(4) blocks(8)
---   atime(8) atime_ns(8) mtime(8) mtime_ns(8) ctime(8) ctime_ns(8)
---   Offsets: mode=16 nlink=20 size=48 atime=72 mtime=88 ctime=104
+-- FFI: delegate to shared stat_ffi module (arch-aware, x86_64 / aarch64).
+-- stat_ffi handles dirent/opendir/closedir/stat cdef and exports helpers.
 -- ──────────────────────────────────────────────────────────
-local ffi = require("ffi")
-
--- Detect CPU architecture once at load time
-local _arch = ffi.arch  -- "x64" on x86_64, "arm64" on aarch64
-
--- Avoid duplicate cdef across hot-reloads
-if not pcall(function() return ffi.sizeof("dirent_t") end) then
-    ffi.cdef[[
-    typedef void DIR;
-    typedef struct {
-        unsigned long  d_ino;
-        long           d_off;
-        unsigned short d_reclen;
-        unsigned char  d_type;
-        char           d_name[256];
-    } dirent_t;
-    DIR*      opendir(const char *name);
-    dirent_t *readdir(DIR *dp);
-    int       closedir(DIR *dp);
-    ]]
-end
-
--- Define arch-specific stat struct (guarded separately so each arch gets its own name)
-local _stat_new   -- function(): ffi.new("stat_xxx")
-local _stat_mode  -- function(st): returns st_mode as number
-local _stat_size  -- function(st): returns st_size as number
-local _stat_mtime -- function(st): returns st_mtime as number
-local _stat_ctime -- function(st): returns st_ctime as number
-local _stat_call  -- function(path, st): calls C.stat or C.stat_x64
-
-if _arch == "x64" then
-    -- x86_64: dev ino nlink mode uid gid _pad0 rdev size blksize blocks atime…
-    if not pcall(function() return ffi.sizeof("stat_x64_t") end) then
-        ffi.cdef[[
-        struct stat_x64_t {
-            unsigned long  st_dev;        /* 0  */
-            unsigned long  st_ino;        /* 8  */
-            unsigned long  st_nlink;      /* 16 */
-            unsigned int   st_mode;       /* 24 */
-            unsigned int   st_uid;        /* 28 */
-            unsigned int   st_gid;        /* 32 */
-            unsigned int   __pad0;        /* 36 */
-            unsigned long  st_rdev;       /* 40 */
-            long           st_size;       /* 48 */
-            long           st_blksize;    /* 56 */
-            long           st_blocks;     /* 64 */
-            long           st_atime;      /* 72 */
-            unsigned long  st_atime_nsec; /* 80 */
-            long           st_mtime;      /* 88 */
-            unsigned long  st_mtime_nsec; /* 96 */
-            long           st_ctime;      /* 104 */
-            unsigned long  st_ctime_nsec; /* 112 */
-            long           __unused[3];   /* 120 */
-        };
-        int stat(const char *path, struct stat_x64_t *buf);
-        ]]
-    end
-    _stat_new   = function() return ffi.new("struct stat_x64_t") end
-    _stat_mode  = function(st) return tonumber(st.st_mode) end
-    _stat_size  = function(st) return tonumber(st.st_size) end
-    _stat_mtime = function(st) return tonumber(st.st_mtime) end
-    _stat_ctime = function(st) return tonumber(st.st_ctime) end
-    _stat_call  = function(path, st) return ffi.C.stat(path, st) end
-else
-    -- aarch64 (and other asm-generic arches): dev ino mode nlink uid gid rdev pad1 size …
-    if not pcall(function() return ffi.sizeof("stat_arm64_t") end) then
-        ffi.cdef[[
-        struct stat_arm64_t {
-            unsigned long  st_dev;        /* 0  */
-            unsigned long  st_ino;        /* 8  */
-            unsigned int   st_mode;       /* 16 */
-            unsigned int   st_nlink;      /* 20 */
-            unsigned int   st_uid;        /* 24 */
-            unsigned int   st_gid;        /* 28 */
-            unsigned long  st_rdev;       /* 32 */
-            unsigned long  __pad1;        /* 40 */
-            long           st_size;       /* 48 */
-            int            st_blksize;    /* 56 */
-            int            __pad2;        /* 60 */
-            long           st_blocks;     /* 64 */
-            long           st_atime;      /* 72 */
-            unsigned long  st_atime_nsec; /* 80 */
-            long           st_mtime;      /* 88 */
-            unsigned long  st_mtime_nsec; /* 96 */
-            long           st_ctime;      /* 104 */
-            unsigned long  st_ctime_nsec; /* 112 */
-            unsigned int   __unused[2];   /* 120 */
-        };
-        int stat(const char *path, struct stat_arm64_t *buf);
-        ]]
-    end
-    _stat_new   = function() return ffi.new("struct stat_arm64_t") end
-    _stat_mode  = function(st) return tonumber(st.st_mode) end
-    _stat_size  = function(st) return tonumber(st.st_size) end
-    _stat_mtime = function(st) return tonumber(st.st_mtime) end
-    _stat_ctime = function(st) return tonumber(st.st_ctime) end
-    _stat_call  = function(path, st) return ffi.C.stat(path, st) end
-end
+local ffi      = require("ffi")
+local stat_ffi = require("lib.stat_ffi")
 
 local C        = ffi.C
 local DT_REG   = 8   -- dirent d_type: regular file
 local DT_DIR   = 4   -- dirent d_type: directory
 local DT_LNK   = 10  -- symlink — call stat to resolve
-local S_IFMT   = 0xF000
-local S_IFDIR  = 0x4000
 
 -- ──────────────────────────────────────────────────────────
 -- Config (cached per worker)
@@ -270,19 +157,10 @@ end
 
 -- ──────────────────────────────────────────────────────────
 -- stat a single path; returns table or nil
--- Uses arch-aware helpers (_stat_new / _stat_call / _stat_mode …)
+-- Uses shared stat_ffi module (arch-aware x86_64 / aarch64)
 -- ──────────────────────────────────────────────────────────
 local function do_stat(path)
-    local st = _stat_new()
-    if _stat_call(path, st) ~= 0 then return nil end
-    local mode = _stat_mode(st)
-    return {
-        size   = _stat_size(st),
-        mtime  = _stat_mtime(st),
-        ctime  = _stat_ctime(st),
-        mode   = mode,
-        is_dir = bit.band(mode, S_IFMT) == S_IFDIR,
-    }
+    return stat_ffi.stat_path(path)
 end
 
 -- ──────────────────────────────────────────────────────────

@@ -50,71 +50,13 @@
 local _M = {}
 
 -- ──────────────────────────────────────────────────────────
--- FFI: stat, mkdir, rename, unlink, rmdir (musl libc)
+-- FFI: delegate to shared stat_ffi module (arch-aware, x86_64 / aarch64)
+-- stat_ffi also cdef's mkdir/rename/unlink/rmdir/__errno_location/strerror.
 -- ──────────────────────────────────────────────────────────
-local ffi = require("ffi")
-
--- Guard against duplicate cdef across hot-reloads.
--- We reuse the stat_t defined by dirapi if it was already loaded; otherwise define it.
-if not pcall(function() return ffi.sizeof("struct stat_t") end) then
-    ffi.cdef[[
-    struct stat_t {
-        unsigned long  st_dev;
-        unsigned long  st_ino;
-        unsigned int   st_mode;
-        unsigned int   st_nlink;
-        unsigned int   st_uid;
-        unsigned int   st_gid;
-        unsigned long  st_rdev;
-        unsigned long  __pad1;
-        long           st_size;
-        int            st_blksize;
-        int            __pad2;
-        long           st_blocks;
-        long           st_atime;
-        unsigned long  st_atime_nsec;
-        long           st_mtime;
-        unsigned long  st_mtime_nsec;
-        long           st_ctime;
-        unsigned long  st_ctime_nsec;
-        unsigned int   __unused[2];
-    };
-    int stat(const char *path, struct stat_t *buf);
-    ]]
-end
-
--- These syscall wrappers are always safe to re-declare (they're just type aliases).
-if not pcall(function() ffi.sizeof("DIR") end) then
-    ffi.cdef[[
-    typedef void DIR;
-    typedef struct {
-        unsigned long  d_ino;
-        long           d_off;
-        unsigned short d_reclen;
-        unsigned char  d_type;
-        char           d_name[256];
-    } dirent_t;
-    DIR*      opendir(const char *name);
-    dirent_t *readdir(DIR *dp);
-    int       closedir(DIR *dp);
-    ]]
-end
-
--- Additional syscalls needed only by fileapi
--- Wrap in pcall to tolerate multiple requires in the same worker.
-pcall(ffi.cdef, [[
-    int mkdir(const char *path, unsigned int mode);
-    int rename(const char *oldpath, const char *newpath);
-    int unlink(const char *path);
-    int rmdir(const char *path);
-    int lstat(const char *path, struct stat_t *buf);
-    int *__errno_location(void);
-    char *strerror(int errnum);
-]])
+local ffi      = require("ffi")
+local stat_ffi = require("lib.stat_ffi")
 
 local C          = ffi.C
-local S_IFMT     = 0xF000
-local S_IFDIR    = 0x4000
 local DT_UNKNOWN = 0
 local DT_DIR     = 4
 local DT_LNK     = 10
@@ -157,13 +99,7 @@ local OK_JSON = '{"ok":true}'
 
 -- stat a path; returns table or nil
 local function do_stat(path)
-    local st = ffi.new("struct stat_t")
-    if C.stat(path, st) ~= 0 then return nil end
-    return {
-        size   = tonumber(st.st_size),
-        mode   = tonumber(st.st_mode),
-        is_dir = bit.band(tonumber(st.st_mode), S_IFMT) == S_IFDIR,
-    }
+    return stat_ffi.stat_path(path)
 end
 
 -- Validate and resolve a user-supplied relative path into an absolute FS path.
@@ -231,13 +167,13 @@ end
 -- lstat_is_dir: use lstat (does NOT follow symlinks) to check if path is a directory.
 -- Used as fallback when d_type == DT_UNKNOWN.
 local function lstat_is_dir(full_path)
-    local sb = ffi.new("struct stat_t")
-    if C.lstat(full_path, sb) ~= 0 then
+    local st = stat_ffi.new()
+    if stat_ffi.lstat(full_path, st) ~= 0 then
         ngx.log(ngx.WARN, "[fileapi] lstat failed for: ", full_path, " errno=", errmsg())
         return false
     end
-    local mode = tonumber(sb.st_mode)
-    local is_d = bit.band(mode, S_IFMT) == S_IFDIR
+    local mode = stat_ffi.mode(st)
+    local is_d = stat_ffi.is_dir(st)
     ngx.log(ngx.DEBUG, "[fileapi] lstat fallback: ", full_path,
             " mode=0", string.format("%o", mode), " is_dir=", tostring(is_d))
     return is_d
