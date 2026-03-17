@@ -31,5 +31,19 @@ return {
     -- OR_LS_LRU_SIZE  = 1000,  -- larger per-worker LRU
     -- ──────────────────────────────────────────────────────────────────────
 
+    -- ── /img/ HTTP disk cache (nginx proxy_cache) ─────────────────────────
+    -- OR_IMG_CACHE_TTL      : cache validity in seconds (default: 3600 = 1h)
+    --                         After this time, cache entry is considered stale
+    -- OR_IMG_CACHE_MAX     : max disk usage (default: 500m)
+    --                         When exceeded, least recently used entries removed
+    -- OR_IMG_CACHE_INACTIVE: time to keep unused entries (default: 1h)
+    --                         Entries not accessed within this time are removed
+    --
+    -- Example overrides (uncomment to activate):
+    -- OR_IMG_CACHE_TTL = 7200,      -- cache for 2 hours
+    -- OR_IMG_CACHE_MAX = "1g",      -- allow up to 1GB disk cache
+    -- OR_IMG_CACHE_INACTIVE = "2h", -- remove after 2 hours of inactivity
+    -- ──────────────────────────────────────────────────────────────────────
+
 	_VERSION = 0.1
 }
