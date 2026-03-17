@@ -79,8 +79,9 @@ RUN set -eux \
     \
     # Download raw Lua files into OpenResty's luajit share path
     && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
-    # OpenResty lualib path — the canonical location for resty.* / klib.* modules
-    && LUALIB=/usr/local/openresty/lualib \
+    # OpenResty site lualib path — the canonical location for third-party modules
+    # This path is searched before lualib, making it the correct place for installed libraries
+    && SITELIB=/usr/local/openresty/site/lualib \
     && cd "${LUA_SHARE}" \
     && wget -q "${GHRAW}/semyon422/luajit-iconv/master/init.lua" -O libiconv.lua \
     && wget -q "${GHRAW}/spacewander/luafilesystem/master/lfs_ffi.lua" \
@@ -88,26 +89,27 @@ RUN set -eux \
     && wget -q "${GHRAW}/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua" \
     && wget -q "${GHRAW}/jkeys089/lua-resty-hmac/master/lib/resty/hmac.lua" \
     \
-    # Install lua-resty-ctxvar (yorkane/lua-resty-ctxvar) → lualib/resty/ctxvar.lua
+    # Install lua-resty-ctxvar (yorkane/lua-resty-ctxvar) → site/lualib/resty/ctxvar.lua
     && cd /tmp && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-ctxvar/archive/refs/heads/main.tar.gz" \
     | tar xz -C _tmp_ \
-    && mkdir -p "${LUALIB}/resty" \
-    && cp _tmp_/lua-resty-ctxvar-main/lib/resty/ctxvar.lua "${LUALIB}/resty/ctxvar.lua" \
+    && mkdir -p "${SITELIB}/resty" \
+    && cp _tmp_/lua-resty-ctxvar-main/lib/resty/ctxvar.lua "${SITELIB}/resty/ctxvar.lua" \
     \
-    # Install lua-resty-mlcache → lualib/resty/mlcache.lua
+    # Install lua-resty-mlcache → site/lualib/resty/mlcache.lua
     # mlcache provides stale-while-revalidate multi-level caching (L1 LRU + L2 shm).
+    # Using site/lualib ensures it's found by OpenResty's module loader.
     && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- "${GHARCHIVE}/thibaultcha/lua-resty-mlcache/archive/refs/heads/master.tar.gz" \
     | tar xz -C _tmp_ \
-    && cp _tmp_/lua-resty-mlcache-master/lib/resty/mlcache.lua "${LUALIB}/resty/mlcache.lua" \
+    && cp _tmp_/lua-resty-mlcache-master/lib/resty/mlcache.lua "${SITELIB}/resty/mlcache.lua" \
     \
-    # Install lua-resty-klib (yorkane/lua-resty-klib) → lualib/klib/*.lua
+    # Install lua-resty-klib (yorkane/lua-resty-klib) → site/lualib/klib/*.lua
     && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz" \
     | tar xz -C _tmp_ \
-    && mkdir -p "${LUALIB}/klib" \
-    && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${LUALIB}/klib/" \
+    && mkdir -p "${SITELIB}/klib" \
+    && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${SITELIB}/klib/" \
     \
     # Copy nginx binary to /usr/local/bin so it's always on PATH
     # regardless of whether ./nginx/ is bind-mounted over the nginx directory.
