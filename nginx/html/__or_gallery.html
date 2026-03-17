@@ -209,7 +209,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 
 /* double page */
-#page-canvas.double { gap: 2px; }
+#page-canvas.double { gap: 0; }
 #page-canvas.double .page-img-wrap.fit { width: 50%; height: 100%; }
 #page-canvas.double .page-img-wrap.orig { width: auto; height: auto; }
 #page-canvas.double .page-img-wrap.rotate { width: 50%; height: 100%; }
@@ -883,6 +883,9 @@ const Reader = {
   // Touch state
   _touch: { startX: 0, startY: 0, startTime: 0 },
 
+  // Drag state (orig mode pan)
+  _drag: { active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 },
+
   init() {
     // Button wiring
     document.getElementById('rbtn-back').onclick = () => this.close();
@@ -896,7 +899,46 @@ const Reader = {
     // Canvas click zone
     this.canvas.addEventListener('click', e => this._handleCanvasClick(e));
 
-    // Touch
+    // ── Orig-mode drag-to-pan (mouse) ──────────────────────────────────────
+    this.canvas.addEventListener('mousedown', e => {
+      if (!this.canvas.classList.contains('orig')) return;
+      if (e.button !== 0) return;
+      this._drag = { active: true, startX: e.clientX, startY: e.clientY,
+                     scrollLeft: this.canvas.scrollLeft, scrollTop: this.canvas.scrollTop,
+                     moved: false };
+      this.canvas.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+      if (!this._drag.active) return;
+      const dx = e.clientX - this._drag.startX;
+      const dy = e.clientY - this._drag.startY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) this._drag.moved = true;
+      this.canvas.scrollLeft = this._drag.scrollLeft - dx;
+      this.canvas.scrollTop  = this._drag.scrollTop  - dy;
+    });
+    document.addEventListener('mouseup', () => {
+      if (!this._drag.active) return;
+      this._drag.active = false;
+      if (this.canvas.classList.contains('orig')) this.canvas.style.cursor = 'grab';
+    });
+
+    // ── Orig-mode drag-to-pan (touch, two-finger scroll already works natively) ──
+    this.canvas.addEventListener('touchstart', e => {
+      if (!this.canvas.classList.contains('orig') || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      this._drag = { active: true, startX: t.clientX, startY: t.clientY,
+                     scrollLeft: this.canvas.scrollLeft, scrollTop: this.canvas.scrollTop };
+    }, { passive: true });
+    this.canvas.addEventListener('touchmove', e => {
+      if (!this._drag.active || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      this.canvas.scrollLeft = this._drag.scrollLeft - (t.clientX - this._drag.startX);
+      this.canvas.scrollTop  = this._drag.scrollTop  - (t.clientY - this._drag.startY);
+    }, { passive: true });
+    this.canvas.addEventListener('touchend', () => { this._drag.active = false; }, { passive: true });
+
+    // Touch swipe (non-orig)
     this.el.addEventListener('touchstart', e => this._touchStart(e), { passive: true });
     this.el.addEventListener('touchend', e => this._touchEnd(e), { passive: true });
 
@@ -980,7 +1022,12 @@ const Reader = {
     this.canvas.querySelectorAll('.page-img-wrap').forEach(el => el.remove());
     // Reset classes then apply current state
     this.canvas.className = '';
-    if (this._viewMode === 'orig') this.canvas.classList.add('orig');
+    if (this._viewMode === 'orig') {
+      this.canvas.classList.add('orig');
+      this.canvas.style.cursor = 'grab';
+    } else {
+      this.canvas.style.cursor = '';
+    }
     if (this._double) this.canvas.classList.add('double');
     this.canvas.style.flexDirection = this._rtl ? 'row-reverse' : 'row';
 
@@ -1142,9 +1189,8 @@ const Reader = {
 
   _handleCanvasClick(e) {
     if (e.target.closest('#reader-toolbar')) return;
-    if (this._toolbarVisible && !document.fullscreenElement) {
-      // toggle toolbar visibility on middle zone click
-    }
+    // If user just panned in orig mode, don't treat mouseup as a navigation click
+    if (this._drag.moved) { this._drag.moved = false; return; }
     const rect = this.el.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const zone = rect.width / 3;
@@ -1195,11 +1241,6 @@ const Reader = {
    KEYBOARD HANDLER
 ═══════════════════════════════════════════════════ */
 document.addEventListener('keydown', e => {
-  if (confirmOverlay.classList.contains('show')) {
-    if (e.key === 'Escape') { confirmOverlay.classList.remove('show'); _confirmResolve?.(false); }
-    return;
-  }
-
   const inReader = Reader.el.classList.contains('active');
 
   if (inReader) {
