@@ -65,6 +65,7 @@ RUN set -eux \
     && luarocks install lua-ffi-zlib      --server="${LUAROCKS_SERVER}" \
     && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
     && luarocks install lua-vips          --server="${LUAROCKS_SERVER}" \
+    && luarocks install lua-resty-mlcache --server="${LUAROCKS_SERVER}" \
     && luarocks --tree=/usr/local/openresty/luajit purge --only-not-installed \
     \
     # Ensure lua-vips is in OpenResty LuaJIT's built-in share path.
@@ -96,16 +97,7 @@ RUN set -eux \
     && mkdir -p "${SITELIB}/resty" \
     && cp _tmp_/lua-resty-ctxvar-main/lib/resty/ctxvar.lua "${SITELIB}/resty/ctxvar.lua" \
     \
-    # Install lua-resty-mlcache → site/lualib/resty/mlcache.lua
-    # mlcache provides stale-while-revalidate multi-level caching (L1 LRU + L2 shm).
-    # Using site/lualib ensures it's found by OpenResty's module loader.
-    && rm -rf _tmp_ && mkdir _tmp_ \
-    && wget -qO- "${GHARCHIVE}/thibaultcha/lua-resty-mlcache/archive/refs/heads/master.tar.gz" \
-    | tar xz -C _tmp_ \
-    && mkdir -p "${SITELIB}/resty" \
-    && cp _tmp_/lua-resty-mlcache-master/lib/resty/mlcache.lua "${SITELIB}/resty/mlcache.lua" \
-    && test -f "${SITELIB}/resty/mlcache.lua" || exit 1 \
-    \
+    # lua-resty-mlcache now installed via luarocks above
     # Install lua-resty-klib (yorkane/lua-resty-klib) → site/lualib/klib/*.lua
     && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz" \
