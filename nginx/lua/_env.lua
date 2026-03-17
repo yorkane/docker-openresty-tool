@@ -32,17 +32,17 @@ return {
     -- ──────────────────────────────────────────────────────────────────────
 
     -- ── /img/ HTTP disk cache (nginx proxy_cache) ─────────────────────────
-    -- OR_IMG_CACHE_TTL      : cache validity in seconds (default: 3600 = 1h)
+    -- OR_IMG_CACHE_TTL      : cache validity time (default: 2 days)
     --                         After this time, cache entry is considered stale
-    -- OR_IMG_CACHE_MAX     : max disk usage (default: 500m)
+    -- OR_IMG_CACHE_MAX     : max disk usage (default: 2g)
     --                         When exceeded, least recently used entries removed
-    -- OR_IMG_CACHE_INACTIVE: time to keep unused entries (default: 1h)
+    -- OR_IMG_CACHE_INACTIVE: time to keep unused entries (default: 60 days)
     --                         Entries not accessed within this time are removed
     --
     -- Example overrides (uncomment to activate):
-    -- OR_IMG_CACHE_TTL = 7200,      -- cache for 2 hours
-    -- OR_IMG_CACHE_MAX = "1g",      -- allow up to 1GB disk cache
-    -- OR_IMG_CACHE_INACTIVE = "2h", -- remove after 2 hours of inactivity
+    -- OR_IMG_CACHE_TTL = "7d",      -- cache for 7 days
+    -- OR_IMG_CACHE_MAX = "5g",      -- allow up to 5GB disk cache
+    -- OR_IMG_CACHE_INACTIVE = "90d",  -- remove after 90 days of inactivity
     -- ──────────────────────────────────────────────────────────────────────
 
 	_VERSION = 0.1

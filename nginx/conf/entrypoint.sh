@@ -17,9 +17,9 @@ export NGX_LS_CACHE_SIZE=${NGX_LS_CACHE_SIZE:-20m}   # mlcache L2 hot dict
 export NGX_LS_STALE_SIZE=${NGX_LS_STALE_SIZE:-20m}   # mlcache stale shadow dict
 
 # /img/ HTTP disk cache (nginx proxy_cache)
-export NGX_IMG_CACHE_TTL=${NGX_IMG_CACHE_TTL:-1h}       # cache validity time
-export NGX_IMG_CACHE_MAX=${NGX_IMG_CACHE_MAX:-500m}     # max disk usage
-export NGX_IMG_CACHE_INACTIVE=${NGX_IMG_CACHE_INACTIVE:-1h}  # inactive time before removal
+export NGX_IMG_CACHE_TTL=${NGX_IMG_CACHE_TTL:-2d}       # cache validity time
+export NGX_IMG_CACHE_MAX=${NGX_IMG_CACHE_MAX:-2g}     # max disk usage
+export NGX_IMG_CACHE_INACTIVE=${NGX_IMG_CACHE_INACTIVE:-60d}  # inactive time before removal
 export NGX_IMG_CACHE_PATH=${NGX_IMG_CACHE_PATH:-/usr/local/openresty/nginx/cache}
 export request_uri='$request_uri'
 export upstream_host='$upstream_host'
