@@ -13,6 +13,8 @@ export NGX_DNS=${NGX_DNS:-local=on valid=60s}
 export NGX_DNS_TIMEOUT=${NGX_DNS_TIMEOUT:-5}
 export NGX_CUSTOM_DNS=${NGX_CUSTOM_DNS:-false}
 export NGX_CACHE_SIZE=${NGX_CACHE_SIZE:-10m}
+export NGX_LS_CACHE_SIZE=${NGX_LS_CACHE_SIZE:-20m}   # mlcache L2 hot dict
+export NGX_LS_STALE_SIZE=${NGX_LS_STALE_SIZE:-20m}   # mlcache stale shadow dict
 export request_uri='$request_uri'
 export upstream_host='$upstream_host'
 export host='$host'

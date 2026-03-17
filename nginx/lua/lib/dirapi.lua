@@ -51,6 +51,16 @@
 local _M = {}
 
 -- ──────────────────────────────────────────────────────────
+-- Cache layer (lua-resty-mlcache, stale-while-revalidate)
+-- Gracefully degrades to no-cache if lscache is unavailable.
+-- ──────────────────────────────────────────────────────────
+local _lscache_ok, lscache = pcall(require, "lib.lscache")
+if not _lscache_ok then
+    ngx.log(ngx.WARN, "[dirapi] lscache unavailable: ", lscache, " — caching disabled")
+    lscache = nil
+end
+
+-- ──────────────────────────────────────────────────────────
 -- ZIP extension set (mirrors zipfs.lua logic, cached per worker)
 -- ──────────────────────────────────────────────────────────
 local _zip_exts_cache
@@ -357,8 +367,23 @@ local function send_json(status, body)
 end
 
 -- ──────────────────────────────────────────────────────────
--- Main handler
--- ──────────────────────────────────────────────────────────
+-- ──────────────────────────────────────────────────────────────────────────────
+-- Cache key builder
+-- Key covers: webdav_root + logical path (fs or zip+inner).
+-- page / sort / order are NOT part of the key because we cache the full
+-- unsorted item list and apply sorting + pagination in memory.
+-- ──────────────────────────────────────────────────────────────────────────────
+local function make_cache_key(webdav_root, kind, path, extra)
+    -- kind: "fs" or "zip"
+    -- path: absolute fs path (fs mode) or zip_path (zip mode)
+    -- extra: inner zip path (zip mode) or nil
+    if kind == "zip" then
+        return "zip:" .. webdav_root .. ":" .. path .. ":" .. (extra or "")
+    else
+        return "fs:" .. path
+    end
+end
+
 function _M.handle(webdav_root)
     webdav_root = (webdav_root or "/webdav"):gsub("/+$", "")
 
@@ -387,45 +412,62 @@ function _M.handle(webdav_root)
     local bare = rel_path:gsub("^/+", "")
 
     -- ── Check whether the path crosses a ZIP boundary ──────────────────────
-    -- e.g. bare = "archives/book.cbz/ch1/page01.html"
-    --      zip_end = position of the last char of ".cbz"
-    --      zip_rel = "archives/book.cbz"
-    --      inner   = "ch1/page01.html"
     local zip_end = find_zip_boundary(bare)
 
     if zip_end then
         -- Path contains a zip-like extension.
-        -- Split into: filesystem part up to & including the zip file,
-        -- and the inner path inside the ZIP.
         local zip_rel = bare:sub(1, zip_end)        -- e.g. "archives/book.cbz"
         local inner   = bare:sub(zip_end + 1):gsub("^/+", ""):gsub("/+$", "")
-        -- inner: "" means ZIP root, "ch1" means subdir "ch1/"
-
         local zip_path = webdav_root .. "/" .. zip_rel
 
-        -- Verify the ZIP file actually exists on disk
+        -- Verify the ZIP file actually exists on disk (stat is cheap, skip cache)
         local zip_attr = do_stat(zip_path)
         if not zip_attr then
             return send_json(404, encode_err("not_found", "zip not found"))
         end
         if zip_attr.is_dir then
-            -- The extension matched something that turned out to be a directory
-            -- (e.g. a folder literally named "foo.zip" — unlikely, fall through)
             return send_json(404, encode_err("not_found", "path is a directory, not a zip file"))
         end
 
-        -- List the ZIP's inner directory
-        local all_items, err = list_zip_dir(zip_path, inner)
+        -- ── Cached ZIP directory listing ────────────────────────────────────
+        local cache_key = make_cache_key(webdav_root, "zip", zip_path, inner)
+
+        local function zip_loader()
+            local items, load_err = list_zip_dir(zip_path, inner)
+            if not items then
+                return nil, load_err or "zip listing failed"
+            end
+            return items
+        end
+
+        local all_items, load_err, is_stale
+        if lscache then
+            all_items, load_err, is_stale = lscache.get(cache_key, zip_loader)
+        else
+            all_items, load_err = zip_loader()
+        end
+
         if not all_items then
-            return send_json(500, encode_err("internal", err or "zip listing failed"))
+            return send_json(500, encode_err("internal", load_err or "zip listing failed"))
         end
 
         -- Display path: /archives/book.cbz[/inner]
         local display_zip = "/" .. zip_rel
         local display = (inner == "" and display_zip or (display_zip .. "/" .. inner))
 
-        sort_items(all_items, sort_by, order)
-        local page_items, total = paginate(all_items, page, page_size)
+        -- Sort and paginate operate on a copy so the cached table is not mutated
+        local items_copy = {}
+        for i, v in ipairs(all_items) do items_copy[i] = v end
+        sort_items(items_copy, sort_by, order)
+        local page_items, total = paginate(items_copy, page, page_size)
+
+        -- Expose stale status via response header (informational, not cached)
+        if is_stale then
+            ngx.header["X-Cache"] = "STALE"
+        else
+            ngx.header["X-Cache"] = "HIT"
+        end
+
         return send_json(200, encode_ok({
             path      = display,
             page      = page,
@@ -441,7 +483,7 @@ function _M.handle(webdav_root)
     local fs_path = webdav_root .. rel_path:gsub("/+$", "")
     if fs_path == "" or fs_path == webdav_root then fs_path = webdav_root end
 
-    -- verify it's a directory
+    -- verify it's a directory (stat is cheap, always fresh)
     local attr = do_stat(fs_path)
     if not attr then
         return send_json(404, encode_err("not_found", "path not found"))
@@ -450,19 +492,46 @@ function _M.handle(webdav_root)
         return send_json(404, encode_err("not_found", "path is not a directory"))
     end
 
-    -- check transparent flag
-    local ok_zf, zipfs   = pcall(require, "lib.zipfs")
+    -- check transparent flag (cached per worker via zipfs upvalue — no overhead)
+    local ok_zf, zipfs    = pcall(require, "lib.zipfs")
     local zip_transparent = ok_zf and zipfs and zipfs.is_transparent_enabled()
 
-    -- list directory
-    local all_items, err = list_fs_dir(fs_path, zip_transparent)
-    if not all_items then
-        return send_json(500, encode_err("internal", err or "listing failed"))
+    -- ── Cached filesystem directory listing ─────────────────────────────────
+    local cache_key = make_cache_key(webdav_root, "fs", fs_path, nil)
+
+    local function fs_loader()
+        local items, load_err = list_fs_dir(fs_path, zip_transparent)
+        if not items then
+            return nil, load_err or "listing failed"
+        end
+        return items
     end
 
-    -- sort, then paginate
-    sort_items(all_items, sort_by, order)
-    local page_items, total = paginate(all_items, page, page_size)
+    local all_items, load_err, is_stale
+    if lscache then
+        all_items, load_err, is_stale = lscache.get(cache_key, fs_loader)
+    else
+        all_items, load_err = fs_loader()
+    end
+
+    if not all_items then
+        return send_json(500, encode_err("internal", load_err or "listing failed"))
+    end
+
+    -- Sort and paginate on a copy (don't mutate the cached table)
+    local items_copy = {}
+    for i, v in ipairs(all_items) do items_copy[i] = v end
+    sort_items(items_copy, sort_by, order)
+    local page_items, total = paginate(items_copy, page, page_size)
+
+    -- Expose cache status
+    if is_stale then
+        ngx.header["X-Cache"] = "STALE"
+    elseif lscache then
+        ngx.header["X-Cache"] = "HIT"
+    else
+        ngx.header["X-Cache"] = "MISS"
+    end
 
     -- normalise display path
     local display = rel_path == "/" and "/" or rel_path:gsub("/+$", "")
@@ -476,6 +545,27 @@ function _M.handle(webdav_root)
         order     = order,
         items     = page_items,
     }))
+end
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- Cache invalidation helpers (call after any write operation on the directory)
+-- ──────────────────────────────────────────────────────────────────────────────
+
+-- Invalidate the FS listing cache for a given directory path.
+-- Pass the absolute filesystem path of the directory that changed.
+function _M.invalidate_fs(webdav_root, fs_path)
+    if not lscache then return end
+    webdav_root = (webdav_root or "/webdav"):gsub("/+$", "")
+    local key = make_cache_key(webdav_root, "fs", fs_path, nil)
+    lscache.delete(key)
+end
+
+-- Invalidate a ZIP inner-directory listing.
+function _M.invalidate_zip(webdav_root, zip_path, inner)
+    if not lscache then return end
+    webdav_root = (webdav_root or "/webdav"):gsub("/+$", "")
+    local key = make_cache_key(webdav_root, "zip", zip_path, inner)
+    lscache.delete(key)
 end
 
 return _M

@@ -94,6 +94,13 @@ RUN set -eux \
     && mkdir -p "${LUALIB}/resty" \
     && cp _tmp_/lua-resty-ctxvar-main/lib/resty/ctxvar.lua "${LUALIB}/resty/ctxvar.lua" \
     \
+    # Install lua-resty-mlcache → lualib/resty/mlcache.lua
+    # mlcache provides stale-while-revalidate multi-level caching (L1 LRU + L2 shm).
+    && rm -rf _tmp_ && mkdir _tmp_ \
+    && wget -qO- "${GHARCHIVE}/thibaultcha/lua-resty-mlcache/archive/refs/heads/master.tar.gz" \
+        | tar xz -C _tmp_ \
+    && cp _tmp_/lua-resty-mlcache-master/lib/resty/mlcache.lua "${LUALIB}/resty/mlcache.lua" \
+    \
     # Install lua-resty-klib (yorkane/lua-resty-klib) → lualib/klib/*.lua
     && rm -rf _tmp_ && mkdir _tmp_ \
     && wget -qO- "${GHARCHIVE}/yorkane/lua-resty-klib/archive/refs/heads/main.tar.gz" \
