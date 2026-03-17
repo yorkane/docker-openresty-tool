@@ -66,13 +66,15 @@ RUN set -eux \
     && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
     && luarocks install lua-vips          --server="${LUAROCKS_SERVER}" \
     \
-    # Copy lua-vips into OpenResty LuaJIT's built-in share path so it can be
-    # found without relying on lua_package_path pointing to /usr/local/share/lua/5.1/.
-    # LuaRocks installs lua-vips to /usr/local/share/lua/5.1/; OpenResty searches
-    # /usr/local/openresty/luajit/share/lua/5.1/ by default.
+    # Ensure lua-vips is in OpenResty LuaJIT's built-in share path.
+    # LuaRocks may install it to /usr/local/share/lua/5.1/ (when default tree is /usr/local)
+    # or directly to /usr/local/openresty/luajit/share/lua/5.1/ depending on luarocks config.
+    # Copy only when it landed outside the LuaJIT tree.
     && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
-    && cp /usr/local/share/lua/5.1/vips.lua   "${LUA_SHARE}/vips.lua" \
-    && cp -r /usr/local/share/lua/5.1/vips/   "${LUA_SHARE}/vips/" \
+    && if [ ! -f "${LUA_SHARE}/vips.lua" ]; then \
+         cp /usr/local/share/lua/5.1/vips.lua "${LUA_SHARE}/vips.lua"; \
+         cp -r /usr/local/share/lua/5.1/vips/ "${LUA_SHARE}/vips/"; \
+       fi \
     \
     # Download raw Lua files into OpenResty's luajit share path
     && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
