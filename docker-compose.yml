@@ -19,8 +19,9 @@ services:
       - ./data:/data
       # ⚠️  Do NOT mount ./nginx:/usr/local/openresty/nginx — it shadows sbin/ and
       #     makes nginx unreachable. Mount only the sub-directories you need:
-      # - ./nginx/conf/default_app:/usr/local/openresty/nginx/conf/default_app
-      # - ./nginx/lua:/usr/local/openresty/nginx/lua
+      - ./nginx/conf/default_app:/usr/local/openresty/nginx/conf/default_app
+      - ./nginx/html:/usr/local/openresty/nginx/html
+      - ./nginx/lua:/usr/local/openresty/nginx/lua
     restart: unless-stopped
     ports:
       - "5080:80"
