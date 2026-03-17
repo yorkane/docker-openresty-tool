@@ -135,6 +135,8 @@ RUN set -eux \
     && rm -rf /usr/local/lib/pkgconfig/* \
     && rm -rf /usr/local/include/* \
     && find /usr/local -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true \
+    && find /usr/local -type d -name "vips-*" -exec rm -rf {} + 2>/dev/null || true \
+    && find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true \
     && echo 'docker-openresty-tool layer built successfully'
 
 # Copy nginx config files (overrides base image's default nginx config)
