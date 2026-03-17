@@ -37,7 +37,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   z-index: 100;
   flex-shrink: 0;
   user-select: none;
+  opacity: 0.2;
+  transition: opacity .2s;
 }
+#toolbar:hover { opacity: 1; }
 #toolbar .btn {
   display: inline-flex; align-items: center; justify-content: center;
   height: 32px; min-width: 32px; padding: 0 8px;
@@ -204,15 +207,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 /* Rotate mode: rotate 90°, swap w/h logic */
 .page-img-wrap.rotate {
   width: 100%; height: 100%;
+  overflow: visible;
 }
 .page-img-wrap.rotate img {
-  max-width: 100%; max-height: 100%;
+  /* Before rotation: width = container height, height = container width.
+     After rotate(90deg) the visual footprint becomes container width × height,
+     which exactly fills the viewport. object-fit:contain preserves aspect ratio. */
+  width: var(--canvas-h, 100vh);
+  height: var(--canvas-w, 100vw);
+  max-width: none; max-height: none;
   object-fit: contain;
   transform: rotate(90deg);
   transform-origin: center;
-  /* When rotated 90°, natural dimensions swap; constrain within viewport */
-  max-width: calc(100vh - var(--toolbar-h));
-  max-height: 100vw;
 }
 
 /* double page */
@@ -982,6 +988,11 @@ const Reader = {
 
     // Fullscreen change
     document.addEventListener('fullscreenchange', () => this._onFullscreenChange());
+
+    // Keep rotate-mode vars in sync when the canvas resizes (window resize / fullscreen)
+    new ResizeObserver(() => {
+      if (this._viewMode === 'rotate') this._updateRotateVars();
+    }).observe(this.canvas);
   },
 
   async open(path, isZipPath) {
@@ -1070,6 +1081,11 @@ const Reader = {
     if (this._double) this.canvas.classList.add('double');
     this.canvas.style.flexDirection = this._rtl ? 'row-reverse' : 'row';
 
+    // For rotate mode: expose canvas dimensions as CSS vars so the img
+    // can be sized width=canvasH, height=canvasW before rotation,
+    // making it visually fill the canvas after rotate(90deg).
+    if (this._viewMode === 'rotate') this._updateRotateVars();
+
     const count = this._double ? 2 : 1;
     for (let i = 0; i < count; i++) {
       const idx = this._idx + i;
@@ -1111,6 +1127,18 @@ const Reader = {
       wrap.style.transform = `scale(${this._scale})`;
       wrap.style.transformOrigin = 'top left';
     });
+  },
+
+  /** Update --canvas-w / --canvas-h CSS vars used by rotate-mode sizing */
+  _updateRotateVars() {
+    // getBoundingClientRect reflects the actual rendered size after layout
+    const rect = this.canvas.getBoundingClientRect();
+    const w = rect.width  || this.canvas.clientWidth;
+    const h = rect.height || this.canvas.clientHeight;
+    // In double-page mode each slot is half the canvas width
+    const slotW = this._double ? w / 2 : w;
+    this.canvas.style.setProperty('--canvas-w', slotW + 'px');
+    this.canvas.style.setProperty('--canvas-h', h + 'px');
   },
 
   _preload(idx) {
