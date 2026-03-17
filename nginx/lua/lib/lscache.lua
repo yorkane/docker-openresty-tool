@@ -164,6 +164,7 @@ end
 function _M.get(key, loader_fn)
     if not _cache then
         -- Cache not initialised (init_worker wasn't called) — fall through to disk
+        ngx_log(ngx_WARN, "[lscache] CACHE NOT INITIALIZED: key=", key)
         local v, e = loader_fn()
         return v, e, false
     end
@@ -180,6 +181,7 @@ function _M.get(key, loader_fn)
 
     if entry == nil then
         -- Loader returned nil (e.g. empty listing or not-found during refresh)
+        ngx_log(ngx_WARN, "[lscache] MISS: key=", key)
         return nil, nil, false
     end
 
@@ -188,12 +190,14 @@ function _M.get(key, loader_fn)
 
     if age <= c.hot_ttl then
         -- ── Fresh hit ────────────────────────────────────────────────────────
+        ngx_log(ngx_WARN, "[lscache] FRESH HIT: key=", key, " age=", age, "s")
         return entry.items, nil, false
     end
 
     -- ── Stale hit ────────────────────────────────────────────────────────────
     -- Data is past hot_ttl but still within total_ttl (mlcache hasn't evicted it).
     -- Return it immediately and schedule one background refresh.
+    ngx_log(ngx_WARN, "[lscache] STALE HIT: key=", key, " age=", age, "s")
     if not _refreshing[key] then
         _refreshing[key] = true
         local tok, terr = ngx_timer(0, do_bg_refresh, key, loader_fn)
