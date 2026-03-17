@@ -1,7 +1,8 @@
-local _M = {hostname='e2b6819df96b',
-SYSTEM_DNS = "192.168.1.8", NGX_CUSTOM_DNS=false,
+local _M = {
+OR_ZIPFS_TRANSPARENT=true,
+SYSTEM_DNS = "127.0.0.11", NGX_CUSTOM_DNS=false,
 NGX_LOG_FILE=false,
-NGX_PID="e2b6819df96b.pid",
+NGX_PID="b3f7e7094a49.pid",
 NGX_APP="default_app",
 NGX_LOG_LEVEL="warn",
 NGX_DNS="local=on valid=60s",
@@ -12,7 +13,7 @@ NGX_CACHE_SIZE="10m",
 NGX_PORT=80,
 NGX_DNS_TIMEOUT=5,
 INIT_AT_UTC = ngx.utctime(),
-generated = 'Thu Aug  8 18:13:03 CST 2024'
+generated = 'Sat Mar 14 21:14:28 CST 2026'
 }
 
 

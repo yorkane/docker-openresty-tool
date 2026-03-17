@@ -153,6 +153,7 @@ docker-openresty-tool/
         ├── mocks.lua        # Mock 接口处理器
         ├── ngx_mock.lua     # Nginx Mock 工具模块
         ├── __or_preview.js  # 媒体预览前端脚本（图片/视频/音频全屏预览，键盘导航）→ 详见 shortcuts.md
+        ├── __or_gallery.html# Gallery SPA（图片/漫画画廊 + 内置阅读器，访问 /__or_gallery）
         ├── resty/           # 自定义 resty 库
         │   └── ctxvar.lua   # 请求上下文变量封装
         └── lib/             # 内置 Lua 库
@@ -180,6 +181,7 @@ docker-openresty-tool/
 | **Vips 图片处理（新）** | 动态裁切、缩放、格式转换（libvips） | 访问 `/img/<path>?w=300&fmt=webp` |
 | **目录 JSON API（新）** | 列出目录/ZIP 内容，支持分页排序，返回 JSON | `GET /api/ls/<path>`，详见 [api.md](api.md) |
 | **文件管理 API（新）** | 删除、移动/改名、新建目录、上传文件 | `DELETE/POST /api/rm、/api/move、/api/mkdir、/api/upload`，详见 [api.md](api.md) |
+| **Gallery 画廊浏览器（新）** | 专为图片/漫画收藏设计的 SPA 画廊：封面卡片浏览（含 vips 缩略图）、内置漫画阅读器（单/双页、LTR/RTL、触屏翻页、全屏）、支持目录和 ZIP/CBZ 直接阅读 | 访问 `/__or_gallery` 或 `/__or_gallery?path=/your/dir` |
 | **媒体预览注入** | 为所有 HTML 目录页自动注入预览按钮，支持图片/视频/音频全屏预览、键盘快捷键导航、删除；三种视图模式：Fit / Orig / Rotate | 自动生效，无需配置；完整快捷键见 [shortcuts.md](shortcuts.md) |
 | **FancyIndex** | 美观的目录浏览页面 | 在 location 中启用 `fancyindex on` |
 | **Wake-on-LAN** | 通过 HTTP 接口远程唤醒局域网设备 | 调用 `lib/wol.lua` |

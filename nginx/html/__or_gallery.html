@@ -1,0 +1,1304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Gallery</title>
+<style>
+/* ─── Reset & Base ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #111;
+  --bg2: #1a1a1a;
+  --bg3: #242424;
+  --border: #333;
+  --text: #e8e8e8;
+  --text2: #999;
+  --accent: #7eb8f7;
+  --danger: #e05252;
+  --radius: 8px;
+  --toolbar-h: 52px;
+}
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; overflow: hidden; }
+
+/* ─── Scrollable container ─── */
+#app { height: 100%; display: flex; flex-direction: column; }
+
+/* ─── Toolbar ─── */
+#toolbar {
+  height: var(--toolbar-h);
+  min-height: var(--toolbar-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  z-index: 100;
+  flex-shrink: 0;
+  user-select: none;
+}
+#toolbar .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 32px; min-width: 32px; padding: 0 8px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); cursor: pointer;
+  font-size: 14px; white-space: nowrap; transition: background .15s;
+}
+#toolbar .btn:hover { background: #333; }
+#toolbar .btn.active { background: var(--accent); color: #111; border-color: var(--accent); }
+#toolbar .btn.danger { border-color: var(--danger); color: var(--danger); }
+#toolbar .btn.danger:hover { background: var(--danger); color: #fff; }
+#toolbar .spacer { flex: 1; }
+#toolbar .breadcrumb {
+  flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  color: var(--text2); font-size: 13px; direction: rtl; text-align: left;
+}
+#toolbar .breadcrumb span { direction: ltr; unicode-bidi: bidi-override; }
+#toolbar .page-info { color: var(--text2); font-size: 13px; white-space: nowrap; }
+
+/* ─── Gallery View ─── */
+#gallery-view {
+  flex: 1; overflow-y: auto; padding: 12px;
+}
+#gallery-view.hidden { display: none; }
+#status-msg.hidden { display: none; }
+#gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 480px) {
+  #gallery-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  #gallery-view { padding: 8px; }
+}
+@media (min-width: 768px) {
+  #gallery-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+}
+@media (min-width: 1200px) {
+  #gallery-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+}
+
+.card {
+  position: relative; cursor: pointer; border-radius: var(--radius);
+  overflow: hidden; background: var(--bg3); border: 1px solid var(--border);
+  transition: transform .15s, box-shadow .15s;
+  touch-action: manipulation;
+}
+.card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+.card:active { transform: scale(.97); }
+.card .thumb-wrap {
+  position: relative; width: 100%; padding-bottom: 140%; /* 5:7 ratio */
+  background: var(--bg2); overflow: hidden;
+}
+.card .thumb-wrap img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; transition: opacity .3s;
+}
+.card .thumb-wrap img.loading { opacity: 0; }
+.card .thumb-wrap .placeholder {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; font-size: 36px; color: var(--text2);
+}
+.card .card-info {
+  padding: 6px 8px 8px;
+}
+.card .card-name {
+  font-size: 12px; line-height: 1.4;
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  word-break: break-all;
+}
+.card .card-meta {
+  margin-top: 3px; font-size: 11px; color: var(--text2);
+}
+.card .del-btn {
+  position: absolute; top: 6px; right: 6px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(0,0,0,.6); border: 1px solid rgba(255,255,255,.2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; cursor: pointer; opacity: 0; transition: opacity .15s;
+  z-index: 2;
+}
+.card:hover .del-btn { opacity: 1; }
+#gallery-grid.del-mode .del-btn { opacity: 1; }
+
+/* ─── Keyboard focus ring ─── */
+.card.kb-focus {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,.5), 0 0 0 3px var(--accent);
+  z-index: 1;
+}
+.card.kb-focus .del-btn { opacity: 1; }
+
+/* sentinel for infinite scroll */
+#gallery-sentinel { height: 1px; width: 100%; }
+
+/* ─── Reader View ─── */
+#reader-view {
+  flex: 1; position: relative; overflow: hidden;
+  display: none; background: #000;
+  touch-action: none;
+}
+#reader-view.active { display: flex; flex-direction: column; }
+
+#reader-toolbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 200;
+  height: var(--toolbar-h);
+  display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  background: linear-gradient(to bottom, rgba(0,0,0,.85), transparent);
+  transition: opacity .25s; pointer-events: auto;
+}
+#reader-toolbar.hidden { opacity: 0; pointer-events: none; }
+#reader-toolbar .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 30px; min-width: 30px; padding: 0 8px;
+  border-radius: 6px; border: 1px solid rgba(255,255,255,.2);
+  background: rgba(0,0,0,.5); color: var(--text); cursor: pointer;
+  font-size: 13px; white-space: nowrap;
+}
+#reader-toolbar .btn:hover { background: rgba(255,255,255,.15); }
+#reader-toolbar .btn.active { background: var(--accent); color: #111; border-color: var(--accent); }
+#reader-toolbar .btn.disabled { opacity: .3; cursor: not-allowed; }
+
+/* Page canvas */
+#page-canvas {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  overflow: hidden; position: relative;
+  gap: 0; background: #000;
+}
+#page-canvas.orig {
+  overflow: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.page-img-wrap {
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; flex-shrink: 0;
+}
+/* Fit mode: fill available space */
+.page-img-wrap.fit {
+  width: 100%; height: 100%;
+}
+.page-img-wrap.fit img {
+  max-width: 100%; max-height: 100%;
+  width: auto; height: auto;
+  object-fit: contain;
+}
+/* Orig mode: natural size */
+.page-img-wrap.orig {
+  width: auto; height: auto; min-width: min-content;
+}
+.page-img-wrap.orig img { width: auto; height: auto; }
+/* Rotate mode: rotate 90°, swap w/h logic */
+.page-img-wrap.rotate {
+  width: 100%; height: 100%;
+}
+.page-img-wrap.rotate img {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain;
+  transform: rotate(90deg);
+  transform-origin: center;
+  /* When rotated 90°, natural dimensions swap; constrain within viewport */
+  max-width: calc(100vh - var(--toolbar-h));
+  max-height: 100vw;
+}
+
+/* double page */
+#page-canvas.double { gap: 2px; }
+#page-canvas.double .page-img-wrap.fit { width: 50%; height: 100%; }
+#page-canvas.double .page-img-wrap.orig { width: auto; height: auto; }
+#page-canvas.double .page-img-wrap.rotate { width: 50%; height: 100%; }
+
+/* Loading spinner */
+.spinner {
+  width: 40px; height: 40px; border: 3px solid rgba(255,255,255,.1);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite; position: absolute;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* OSD */
+#osd {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(0,0,0,.75); color: #fff; font-size: 18px;
+  padding: 10px 20px; border-radius: 8px; pointer-events: none;
+  opacity: 0; transition: opacity .3s; z-index: 999;
+}
+#osd.show { opacity: 1; }
+
+/* ─── Confirm Dialog ─── */
+#confirm-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7);
+  z-index: 1000; align-items: center; justify-content: center;
+}
+#confirm-overlay.show { display: flex; }
+#confirm-box {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px 28px; max-width: 320px; width: 90%;
+  text-align: center;
+}
+#confirm-box h3 { font-size: 16px; margin-bottom: 8px; }
+#confirm-box p { color: var(--text2); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+#confirm-box .confirm-btns { display: flex; gap: 10px; }
+#confirm-box .confirm-btns button {
+  flex: 1; height: 38px; border-radius: 8px; border: none;
+  font-size: 14px; cursor: pointer; font-weight: 500;
+}
+#confirm-box .confirm-btns .btn-cancel { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+#confirm-box .confirm-btns .btn-ok { background: var(--danger); color: #fff; }
+
+/* ─── Loading skeleton ─── */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg3) 25%, #2e2e2e 50%, var(--bg3) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius);
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+.card.skeleton .thumb-wrap { padding-bottom: 140%; }
+.card.skeleton .card-name { height: 12px; margin: 8px; border-radius: 4px; }
+
+/* ─── Empty / Error states ─── */
+#status-msg {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px; color: var(--text2); text-align: center; padding: 32px;
+  display: none;
+}
+#status-msg.show { display: flex; }
+#status-msg .status-icon { font-size: 48px; }
+#status-msg .status-text { font-size: 16px; }
+#status-msg .status-sub { font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- ─── Gallery Toolbar ─── -->
+  <div id="toolbar">
+    <button class="btn" id="btn-back" title="返回上级 (B)">←</button>
+    <div class="breadcrumb"><span id="breadcrumb-text">/</span></div>
+    <button class="btn" id="btn-del-mode" title="删除模式">🗑</button>
+  </div>
+
+  <!-- ─── Gallery Grid ─── -->
+  <div id="gallery-view">
+    <div id="gallery-grid"></div>
+    <div id="gallery-sentinel"></div>
+  </div>
+
+  <!-- ─── Status (empty/error) ─── -->
+  <div id="status-msg">
+    <div class="status-icon" id="status-icon">📂</div>
+    <div class="status-text" id="status-text">空文件夹</div>
+    <div class="status-sub" id="status-sub"></div>
+  </div>
+
+  <!-- ─── Reader View ─── -->
+  <div id="reader-view">
+    <div id="reader-toolbar">
+      <button class="btn" id="rbtn-back" title="返回 (B/Esc)">←</button>
+      <span class="page-info" id="page-info" style="color:#ccc;font-size:13px;flex:1;text-align:center"></span>
+      <button class="btn" id="rbtn-double" title="单/双页">单页</button>
+      <button class="btn" id="rbtn-rtl" title="翻页方向">LTR→</button>
+      <button class="btn" id="rbtn-view" title="视图模式 (O)">Fit</button>
+      <button class="btn" id="rbtn-rotate" title="旋转 (V)">🔄</button>
+      <button class="btn" id="rbtn-fs" title="全屏 (F)">⛶</button>
+      <button class="btn danger" id="rbtn-del" title="删除当前图 (Del)">🗑</button>
+    </div>
+    <div id="page-canvas">
+      <div class="spinner" id="reader-spinner"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Confirm Dialog ─── -->
+<div id="confirm-overlay">
+  <div id="confirm-box">
+    <h3 id="confirm-title">确认删除</h3>
+    <p id="confirm-msg">此操作不可撤销</p>
+    <div class="confirm-btns">
+      <button class="btn-cancel" id="confirm-cancel">取消</button>
+      <button class="btn-ok" id="confirm-ok">删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── OSD ─── -->
+<div id="osd"></div>
+
+<script>
+'use strict';
+/* ═══════════════════════════════════════════════════
+   UTILS
+═══════════════════════════════════════════════════ */
+const IMG_EXTS = new Set(['jpg','jpeg','png','gif','webp','avif','bmp','jxl']);
+const ZIP_EXTS = new Set(['zip','cbz','epub']);
+const COVER_RE = /^(\d{0,6}[-_\s]?)cover/i;
+
+function extOf(name) {
+  const i = name.lastIndexOf('.');
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
+}
+function isImage(name) { return IMG_EXTS.has(extOf(name)); }
+function isZip(type) { return type === 'zip'; }
+function isDir(type) { return type === 'dir'; }
+
+/** Natural sort comparator */
+function naturalCmp(a, b) {
+  const re = /(\d+)/g;
+  const pa = a.split(re), pb = b.split(re);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const sa = pa[i] ?? '', sb = pb[i] ?? '';
+    if (i % 2 === 1) { // numeric segment
+      const na = parseInt(sa, 10) || 0, nb = parseInt(sb, 10) || 0;
+      if (na !== nb) return na - nb;
+    } else {
+      const c = sa.localeCompare(sb, undefined, {sensitivity: 'base'});
+      if (c !== 0) return c;
+    }
+  }
+  return 0;
+}
+
+function naturalSort(arr, key) {
+  return [...arr].sort((a, b) => naturalCmp(key ? a[key] : a, key ? b[key] : b));
+}
+
+/** Pick cover from a list of items (already natural-sorted) */
+function pickCover(items) {
+  const imgs = items.filter(it => it.type === 'file' && isImage(it.name));
+  if (!imgs.length) return null;
+  const cover = imgs.find(it => COVER_RE.test(it.name));
+  return cover || imgs[0];
+}
+
+/** Build a URL for serving a file */
+function fileUrl(path, name) {
+  // path already has leading slash, name is bare filename
+  const base = path.endsWith('/') ? path : path + '/';
+  return encodeFilePath(base + name);
+}
+
+/** Build a URL for a file inside a zip via ZipFS */
+function zipFileUrl(archivePath, internalPath) {
+  // archivePath like /foo/bar.cbz, internalPath like cover.jpg or ch1/01.jpg
+  // internalPath may contain slashes (sub-dirs), encode each segment separately
+  const encodedInternal = internalPath.split('/').map(s => encodeURIComponent(s)).join('/');
+  return '/zip' + encodeFilePath(archivePath) + '/' + encodedInternal;
+}
+
+function encodeFilePath(p) {
+  // Encode each path segment individually, preserving slashes
+  return p.split('/').map(s => s ? encodeURIComponent(s) : s).join('/');
+}
+
+function joinPath(...parts) {
+  return '/' + parts.join('/').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+}
+
+/** Format file size */
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+/* ═══════════════════════════════════════════════════
+   API
+═══════════════════════════════════════════════════ */
+async function apiLs(path, opts = {}) {
+  const params = new URLSearchParams({
+    sort: 'name', order: 'asc',
+    page: String(opts.page ?? 1),
+    page_size: String(opts.page_size ?? 50),
+  });
+  const url = '/api/ls' + (path.startsWith('/') ? path : '/' + path) + '?' + params;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function apiRm(path) {
+  const res = await fetch('/api/rm' + (path.startsWith('/') ? path : '/' + path), { method: 'DELETE' });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Fetch ALL images in a path, handling pagination */
+async function fetchAllImages(path) {
+  const PAGE = 200;
+  let page = 1, all = [];
+  while (true) {
+    const data = await apiLs(path, { page, page_size: PAGE });
+    all = all.concat(data.items.filter(it => it.type === 'file' && isImage(it.name)));
+    if (data.page * data.page_size >= data.total || data.items.length === 0) break;
+    page++;
+  }
+  return naturalSort(all, 'name');
+}
+
+/** Fetch cover: get first page, find cover image */
+async function fetchCoverItem(path) {
+  try {
+    const data = await apiLs(path, { page: 1, page_size: 20 });
+    let imgs = naturalSort(data.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
+    if (!imgs.length && data.total > 20) {
+      const data2 = await apiLs(path, { page: 2, page_size: 20 });
+      imgs = naturalSort(data2.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
+    }
+    return pickCover(imgs);
+  } catch { return null; }
+}
+
+/* ═══════════════════════════════════════════════════
+   CONFIRM DIALOG
+═══════════════════════════════════════════════════ */
+let _confirmResolve = null;
+const confirmOverlay = document.getElementById('confirm-overlay');
+document.getElementById('confirm-cancel').onclick = () => { confirmOverlay.classList.remove('show'); _confirmResolve?.(false); };
+document.getElementById('confirm-ok').onclick = () => { confirmOverlay.classList.remove('show'); _confirmResolve?.(true); };
+
+function showConfirm(title, msg) {
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-msg').textContent = msg;
+  confirmOverlay.classList.add('show');
+  return new Promise(r => { _confirmResolve = r; });
+}
+
+/* ═══════════════════════════════════════════════════
+   OSD
+═══════════════════════════════════════════════════ */
+let _osdTimer = null;
+function showOsd(msg, dur = 1200) {
+  const el = document.getElementById('osd');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_osdTimer);
+  _osdTimer = setTimeout(() => el.classList.remove('show'), dur);
+}
+
+/* ═══════════════════════════════════════════════════
+   SETTINGS  (persisted in localStorage)
+═══════════════════════════════════════════════════ */
+const Settings = {
+  defaults: { doublePages: false, rtl: false, viewMode: 'fit' },
+  _data: null,
+  load() {
+    try { this._data = { ...this.defaults, ...JSON.parse(localStorage.getItem('__or_gallery') || '{}') }; }
+    catch { this._data = { ...this.defaults }; }
+  },
+  save() { localStorage.setItem('__or_gallery', JSON.stringify(this._data)); },
+  get(k) { return this._data[k]; },
+  set(k, v) { this._data[k] = v; this.save(); },
+};
+Settings.load();
+
+/* ═══════════════════════════════════════════════════
+   ROUTER
+═══════════════════════════════════════════════════ */
+const Router = {
+  getPath() {
+    const p = new URLSearchParams(location.search).get('path') || '/';
+    return p;
+  },
+  push(path) {
+    const url = location.pathname + '?path=' + encodeURIComponent(path);
+    history.pushState({ path }, '', url);
+    App.navigate(path);
+  },
+  replace(path) {
+    const url = location.pathname + '?path=' + encodeURIComponent(path);
+    history.replaceState({ path }, '', url);
+  },
+};
+window.addEventListener('popstate', e => {
+  App.navigate(e.state?.path || Router.getPath(), true);
+});
+
+/* ═══════════════════════════════════════════════════
+   GALLERY VIEW
+═══════════════════════════════════════════════════ */
+const GalleryView = {
+  el: document.getElementById('gallery-view'),
+  grid: document.getElementById('gallery-grid'),
+  sentinel: document.getElementById('gallery-sentinel'),
+  toolbar: document.getElementById('toolbar'),
+
+  _path: '/',
+  _page: 1,
+  _total: 0,
+  _loading: false,
+  _delMode: false,
+  _observer: null,
+
+  // IntersectionObserver for cover lazy-loading
+  _coverObserver: null,
+
+  // Keyboard focus index (-1 = no focus)
+  _kbIdx: -1,
+
+  init() {
+    document.getElementById('btn-back').addEventListener('click', () => this.goBack());
+    document.getElementById('btn-del-mode').addEventListener('click', () => this.toggleDelMode());
+
+    // Click on grid clears kb-focus
+    this.grid.addEventListener('click', () => {});
+    // Mouse move on any card → switch kb focus to it
+    this.el.addEventListener('mousemove', e => {
+      const card = e.target.closest('.card');
+      if (card) {
+        const cards = this._cards();
+        const idx = cards.indexOf(card);
+        if (idx !== -1 && idx !== this._kbIdx) this._setFocus(idx, false);
+      }
+    });
+
+    // Infinite scroll observer
+    this._observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && !this._loading) this.loadMore();
+    }, { rootMargin: '200px' });
+
+    // Cover lazy-load observer
+    this._coverObserver = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          const card = e.target;
+          this._coverObserver.unobserve(card);
+          this._loadCover(card);
+        }
+      });
+    }, { rootMargin: '300px' });
+  },
+
+  /** Return all non-skeleton cards */
+  _cards() {
+    return Array.from(this.grid.querySelectorAll('.card:not(.skeleton)'));
+  },
+
+  /** Compute current column count from CSS grid layout */
+  _colCount() {
+    const cards = this._cards();
+    if (cards.length < 2) return 1;
+    const top0 = cards[0].getBoundingClientRect().top;
+    let cols = 1;
+    for (let i = 1; i < cards.length; i++) {
+      if (Math.abs(cards[i].getBoundingClientRect().top - top0) > 4) break;
+      cols++;
+    }
+    return cols;
+  },
+
+  /**
+   * Set keyboard focus to card at index idx.
+   * @param {number} idx
+   * @param {boolean} scroll  whether to scrollIntoView (default true)
+   */
+  _setFocus(idx, scroll = true) {
+    const cards = this._cards();
+    if (!cards.length) return;
+    idx = Math.max(0, Math.min(idx, cards.length - 1));
+
+    // Remove old focus
+    if (this._kbIdx >= 0 && this._kbIdx < cards.length) {
+      cards[this._kbIdx].classList.remove('kb-focus');
+    }
+    this._kbIdx = idx;
+    const card = cards[idx];
+    card.classList.add('kb-focus');
+    if (scroll) {
+      card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    }
+  },
+
+  /** Move kb focus: delta = ±1 (left/right) or ±cols (up/down) */
+  kbMove(delta) {
+    const cards = this._cards();
+    if (!cards.length) return;
+
+    // If no focus yet, pick first card
+    if (this._kbIdx < 0) { this._setFocus(0); return; }
+
+    const next = this._kbIdx + delta;
+    if (next < 0 || next >= cards.length) return;
+    this._setFocus(next);
+  },
+
+  /** Open the currently focused card */
+  kbEnter() {
+    const cards = this._cards();
+    if (this._kbIdx < 0 || this._kbIdx >= cards.length) return;
+    Router.push(cards[this._kbIdx].dataset.path);
+  },
+
+  /** Delete the currently focused card */
+  async kbDelete() {
+    const cards = this._cards();
+    if (this._kbIdx < 0 || this._kbIdx >= cards.length) return;
+    const card = cards[this._kbIdx];
+    card.querySelector('.del-btn')?.click();
+  },
+
+  async show(path) {
+    this._path = path;
+    this._page = 1;
+    this._total = 0;
+    this._loading = false;
+    this._delMode = false;
+    this._kbIdx = -1;
+    this.grid.innerHTML = '';
+    this.el.scrollTop = 0;
+
+    document.getElementById('btn-del-mode').classList.remove('active');
+    this.grid.classList.remove('del-mode');
+    document.getElementById('breadcrumb-text').textContent = path;
+    document.getElementById('btn-back').style.display = path === '/' ? 'none' : '';
+
+    this.el.classList.remove('hidden');
+    document.getElementById('reader-view').classList.remove('active');
+    document.getElementById('status-msg').classList.remove('show');
+    document.getElementById('toolbar').style.display = '';
+
+    this._observer.observe(this.sentinel);
+    await this.loadMore();
+  },
+
+  async loadMore() {
+    if (this._loading) return;
+    if (this._page > 1 && this._page * 50 >= this._total) return;
+
+    this._loading = true;
+    this._appendSkeletons(4);
+
+    try {
+      const data = await apiLs(this._path, { page: this._page, page_size: 50 });
+      this._total = data.total;
+
+      // Remove skeletons
+      this.grid.querySelectorAll('.card.skeleton').forEach(el => el.remove());
+
+      // Filter: only dir and zip
+      const items = data.items.filter(it => isDir(it.type) || isZip(it.type));
+      items.forEach(it => this._appendCard(it));
+
+      if (this._page === 1 && items.length === 0) {
+        this._showEmpty();
+      }
+
+      this._page++;
+    } catch (err) {
+      this.grid.querySelectorAll('.card.skeleton').forEach(el => el.remove());
+      this._showError(err.message);
+    } finally {
+      this._loading = false;
+    }
+  },
+
+  _appendSkeletons(n) {
+    for (let i = 0; i < n; i++) {
+      const el = document.createElement('div');
+      el.className = 'card skeleton';
+      el.innerHTML = '<div class="thumb-wrap"></div><div class="card-name skeleton"></div>';
+      this.grid.appendChild(el);
+    }
+  },
+
+  _appendCard(item) {
+    const isZipItem = isZip(item.type);
+    const icon = isZipItem ? '🗜️' : '📁';
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.name = item.name;
+    card.dataset.type = item.type;
+    card.dataset.path = joinPath(this._path, item.name);
+    card.innerHTML = `
+      <div class="thumb-wrap">
+        <div class="placeholder">${icon}</div>
+        <img class="loading" alt="" loading="lazy">
+      </div>
+      <div class="card-info">
+        <div class="card-name">${escHtml(item.name)}</div>
+        <div class="card-meta">${icon} ${isZipItem ? fmtSize(item.size) : ''}</div>
+      </div>
+      <div class="del-btn" title="删除">✕</div>
+    `;
+
+    // Click → navigate
+    card.addEventListener('click', e => {
+      if (e.target.closest('.del-btn')) return;
+      // Sync kb focus index so subsequent keyboard nav starts from here
+      const cards = this._cards();
+      this._kbIdx = cards.indexOf(card);
+      Router.push(card.dataset.path);
+    });
+
+    // Delete button
+    card.querySelector('.del-btn').addEventListener('click', async e => {
+      e.stopPropagation();
+      const name = item.name;
+      const confirmed = await showConfirm(
+        '删除确认',
+        `将删除 "${name}"${isDir(item.type) ? ' 及其所有内容' : ''}，此操作不可撤销。`
+      );
+      if (!confirmed) return;
+      try {
+        await apiRm(card.dataset.path);
+        card.remove();
+        showOsd('已删除');
+      } catch (err) {
+        showOsd('删除失败: ' + err.message, 3000);
+      }
+    });
+
+    this.grid.appendChild(card);
+
+    // Observe for cover lazy load
+    this._coverObserver.observe(card);
+  },
+
+  async _loadCover(card) {
+    const path = card.dataset.path;
+    const type = card.dataset.type;
+    const img = card.querySelector('img');
+
+    const coverItem = await fetchCoverItem(path);
+    if (!coverItem) return;
+
+    let url;
+    if (isZip(type)) {
+      // ZIP内封面走 /zip/ 路由，不能用 /img/ 做缩略图
+      url = zipFileUrl(path, coverItem.name);
+    } else {
+      // 普通目录封面走 /img/ 做 vips 缩略图（360px 宽，cover 模式）
+      const rawUrl = fileUrl(path, coverItem.name);
+      // /img/ 路径：去掉开头的 / 拿到相对路径，再加 /img/ 前缀
+      url = '/img' + rawUrl + '?w=360&h=504&fit=cover&q=82';
+    }
+
+    img.onload = () => { img.classList.remove('loading'); };
+    img.onerror = () => {
+      // vips 缩略图失败时回退到原图
+      if (img.src !== fileUrl(path, coverItem.name)) {
+        img.src = fileUrl(path, coverItem.name);
+      } else {
+        img.remove();
+      }
+    };
+    img.src = url;
+  },
+
+  toggleDelMode() {
+    this._delMode = !this._delMode;
+    document.getElementById('btn-del-mode').classList.toggle('active', this._delMode);
+    this.grid.classList.toggle('del-mode', this._delMode);
+  },
+
+  goBack() {
+    const parts = this._path.replace(/\/$/, '').split('/');
+    parts.pop();
+    const parent = parts.join('/') || '/';
+    Router.push(parent);
+  },
+
+  _showEmpty() {
+    const s = document.getElementById('status-msg');
+    document.getElementById('status-icon').textContent = '📂';
+    document.getElementById('status-text').textContent = '这里什么都没有';
+    document.getElementById('status-sub').textContent = '没有找到图片目录或压缩包';
+    s.classList.add('show');
+    this.el.classList.add('hidden');
+  },
+
+  _showError(msg) {
+    const s = document.getElementById('status-msg');
+    document.getElementById('status-icon').textContent = '⚠️';
+    document.getElementById('status-text').textContent = '加载失败';
+    document.getElementById('status-sub').textContent = msg;
+    s.classList.add('show');
+    this.el.classList.add('hidden');
+  },
+};
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ═══════════════════════════════════════════════════
+   READER VIEW
+═══════════════════════════════════════════════════ */
+const Reader = {
+  el: document.getElementById('reader-view'),
+  canvas: document.getElementById('page-canvas'),
+  toolbar: document.getElementById('reader-toolbar'),
+  spinner: document.getElementById('reader-spinner'),
+
+  _path: null,          // dir or zip path
+  _isZip: false,
+  _images: [],          // [{name, url}]
+  _idx: 0,              // current index (left page in double mode)
+  _viewMode: 'fit',     // fit | orig | rotate
+  _double: false,
+  _rtl: false,
+  _toolbarTimer: null,
+  _toolbarVisible: true,
+
+  // Touch state
+  _touch: { startX: 0, startY: 0, startTime: 0 },
+
+  init() {
+    // Button wiring
+    document.getElementById('rbtn-back').onclick = () => this.close();
+    document.getElementById('rbtn-double').onclick = () => this.toggleDouble();
+    document.getElementById('rbtn-rtl').onclick = () => this.toggleRtl();
+    document.getElementById('rbtn-view').onclick = () => this.cycleViewMode();
+    document.getElementById('rbtn-rotate').onclick = () => this.toggleRotate();
+    document.getElementById('rbtn-fs').onclick = () => this.toggleFullscreen();
+    document.getElementById('rbtn-del').onclick = () => this.deleteCurrentPage();
+
+    // Canvas click zone
+    this.canvas.addEventListener('click', e => this._handleCanvasClick(e));
+
+    // Touch
+    this.el.addEventListener('touchstart', e => this._touchStart(e), { passive: true });
+    this.el.addEventListener('touchend', e => this._touchEnd(e), { passive: true });
+
+    // Fullscreen change
+    document.addEventListener('fullscreenchange', () => this._onFullscreenChange());
+  },
+
+  async open(path, isZipPath) {
+    this._path = path;
+    this._isZip = isZipPath;
+    this._double = Settings.get('doublePages');
+    this._rtl = Settings.get('rtl');
+    this._viewMode = Settings.get('viewMode');
+    this._images = [];
+    this._idx = 0;
+
+    this._showToolbar(true);
+
+    // Switch to reader
+    document.getElementById('gallery-view').classList.add('hidden');
+    document.getElementById('status-msg').classList.remove('show');
+    document.getElementById('toolbar').style.display = 'none';
+    this.el.classList.add('active');
+
+    // Update toolbar buttons
+    this._syncButtons();
+
+    // Show spinner
+    this.spinner.style.display = '';
+    this.canvas.querySelectorAll('.page-img-wrap').forEach(el => el.remove());
+
+    try {
+      const rawImages = await fetchAllImages(path);
+      if (!rawImages.length) {
+        showOsd('没有找到图片', 2000);
+        this.close();
+        return;
+      }
+
+      this._images = rawImages.map(it => ({
+        name: it.name,
+        url: isZipPath ? zipFileUrl(path, it.name) : fileUrl(path, it.name),
+      }));
+      this.spinner.style.display = 'none';
+      this._renderPage();
+    } catch (err) {
+      this.spinner.style.display = 'none';
+      showOsd('加载失败: ' + err.message, 3000);
+      this.close();
+    }
+  },
+
+  close() {
+    this.el.classList.remove('active');
+    document.getElementById('gallery-view').classList.remove('hidden');
+    document.getElementById('toolbar').style.display = '';
+    if (document.fullscreenElement) document.exitFullscreen();
+    App.backToGallery();
+  },
+
+  _renderPage() {
+    // Clear canvas
+    this.canvas.querySelectorAll('.page-img-wrap').forEach(el => el.remove());
+    // Reset classes then apply current state
+    this.canvas.className = '';
+    if (this._viewMode === 'orig') this.canvas.classList.add('orig');
+    if (this._double) this.canvas.classList.add('double');
+    this.canvas.style.flexDirection = this._rtl ? 'row-reverse' : 'row';
+
+    const count = this._double ? 2 : 1;
+    for (let i = 0; i < count; i++) {
+      const idx = this._idx + i;
+      if (idx >= this._images.length) break;
+      this._appendPageImg(idx);
+    }
+
+    this._updatePageInfo();
+    this._showToolbar(true);
+
+    // Preload neighbors
+    this._preload(this._idx - 1);
+    this._preload(this._idx + 1);
+    this._preload(this._idx + (this._double ? 2 : 1));
+  },
+
+  _appendPageImg(idx) {
+    const item = this._images[idx];
+    const wrap = document.createElement('div');
+    // viewMode class controls img sizing
+    wrap.className = 'page-img-wrap ' + this._viewMode;
+    wrap.dataset.idx = idx;
+    const img = document.createElement('img');
+    img.alt = item.name;
+    img.draggable = false;
+    // Apply rotation class if needed
+    if (this._viewMode === 'rotate') img.classList.add('rotate');
+    img.src = item.url;
+    wrap.appendChild(img);
+    this.canvas.appendChild(wrap);
+  },
+
+  _preload(idx) {
+    if (idx < 0 || idx >= this._images.length) return;
+    const img = new Image();
+    img.src = this._images[idx].url;
+  },
+
+  _updatePageInfo() {
+    const total = this._images.length;
+    const cur = this._idx + 1;
+    const info = this._double
+      ? `${cur}–${Math.min(cur + 1, total)} / ${total}`
+      : `${cur} / ${total}`;
+    document.getElementById('page-info').textContent = info;
+    document.getElementById('rbtn-del').classList.toggle('disabled', this._isZip);
+  },
+
+  navigate(delta) {
+    const step = this._double ? 2 : 1;
+    const newIdx = this._idx + (this._rtl ? -delta : delta) * step;
+    if (newIdx < 0 || newIdx >= this._images.length) return;
+    this._idx = newIdx;
+    this._renderPage();
+  },
+
+  gotoFirst() { this._idx = 0; this._renderPage(); },
+  gotoLast() {
+    const step = this._double ? 2 : 1;
+    this._idx = Math.max(0, this._images.length - step);
+    this._renderPage();
+  },
+
+  toggleDouble() {
+    this._double = !this._double;
+    Settings.set('doublePages', this._double);
+    this._syncButtons();
+    this._renderPage();
+  },
+
+  toggleRtl() {
+    this._rtl = !this._rtl;
+    Settings.set('rtl', this._rtl);
+    this._syncButtons();
+    this._renderPage();
+  },
+
+  cycleViewMode() {
+    const modes = ['fit', 'orig'];
+    const next = modes[(modes.indexOf(this._viewMode) + 1) % modes.length];
+    this._viewMode = next;
+    Settings.set('viewMode', next);
+    this._syncButtons();
+    this._renderPage();
+  },
+
+  toggleRotate() {
+    const newMode = this._viewMode === 'rotate' ? 'fit' : 'rotate';
+    this._viewMode = newMode;
+    Settings.set('viewMode', newMode);
+    this._syncButtons();
+    this._renderPage();
+  },
+
+  toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      this.el.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  },
+
+  _onFullscreenChange() {
+    const isFs = !!document.fullscreenElement;
+    document.getElementById('rbtn-fs').classList.toggle('active', isFs);
+    if (isFs) this._autoHideToolbar();
+  },
+
+  async deleteCurrentPage() {
+    if (this._isZip) return;
+    const item = this._images[this._idx];
+    if (!item) return;
+
+    const confirmed = await showConfirm('删除图片', `删除 "${item.name}"？此操作不可撤销。`);
+    if (!confirmed) return;
+
+    const filePath = joinPath(this._path, item.name);
+    try {
+      await apiRm(filePath);
+      this._images.splice(this._idx, 1);
+      if (this._idx >= this._images.length) this._idx = Math.max(0, this._images.length - 1);
+      if (!this._images.length) { this.close(); return; }
+      this._renderPage();
+      showOsd('已删除');
+    } catch (err) {
+      showOsd('删除失败: ' + err.message, 3000);
+    }
+  },
+
+  _syncButtons() {
+    document.getElementById('rbtn-double').textContent = this._double ? '双页' : '单页';
+    document.getElementById('rbtn-double').classList.toggle('active', this._double);
+    document.getElementById('rbtn-rtl').textContent = this._rtl ? '←RTL' : 'LTR→';
+    document.getElementById('rbtn-rtl').classList.toggle('active', this._rtl);
+    document.getElementById('rbtn-view').textContent = this._viewMode === 'orig' ? 'Orig' : 'Fit';
+    document.getElementById('rbtn-view').classList.toggle('active', this._viewMode === 'orig');
+    document.getElementById('rbtn-rotate').classList.toggle('active', this._viewMode === 'rotate');
+  },
+
+  _showToolbar(force = false) {
+    if (this._toolbarVisible && !force) return;
+    this._toolbarVisible = true;
+    this.toolbar.classList.remove('hidden');
+    clearTimeout(this._toolbarTimer);
+    if (document.fullscreenElement) this._autoHideToolbar();
+  },
+
+  _autoHideToolbar() {
+    clearTimeout(this._toolbarTimer);
+    this._toolbarTimer = setTimeout(() => {
+      this._toolbarVisible = false;
+      this.toolbar.classList.add('hidden');
+    }, 3000);
+  },
+
+  _handleCanvasClick(e) {
+    if (e.target.closest('#reader-toolbar')) return;
+    if (this._toolbarVisible && !document.fullscreenElement) {
+      // toggle toolbar visibility on middle zone click
+    }
+    const rect = this.el.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const zone = rect.width / 3;
+
+    if (x < zone) {
+      this._showToolbar(true);
+      this.navigate(this._rtl ? 1 : -1); // left zone → prev (LTR) or next (RTL)
+    } else if (x > rect.width - zone) {
+      this._showToolbar(true);
+      this.navigate(this._rtl ? -1 : 1); // right zone → next (LTR) or prev (RTL)
+    } else {
+      // Middle zone: toggle toolbar
+      if (this._toolbarVisible) {
+        this._toolbarVisible = false;
+        this.toolbar.classList.add('hidden');
+      } else {
+        this._showToolbar(true);
+      }
+    }
+  },
+
+  _touchStart(e) {
+    const t = e.touches[0];
+    this._touch.startX = t.clientX;
+    this._touch.startY = t.clientY;
+    this._touch.startTime = Date.now();
+  },
+
+  _touchEnd(e) {
+    const t = e.changedTouches[0];
+    const dx = t.clientX - this._touch.startX;
+    const dy = t.clientY - this._touch.startY;
+    const dt = Date.now() - this._touch.startTime;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 400) {
+      // Swipe
+      if (dx < 0) {
+        // swipe left → next (LTR) or prev (RTL)
+        this.navigate(this._rtl ? -1 : 1);
+      } else {
+        // swipe right → prev (LTR) or next (RTL)
+        this.navigate(this._rtl ? 1 : -1);
+      }
+    }
+  },
+};
+
+/* ═══════════════════════════════════════════════════
+   KEYBOARD HANDLER
+═══════════════════════════════════════════════════ */
+document.addEventListener('keydown', e => {
+  if (confirmOverlay.classList.contains('show')) {
+    if (e.key === 'Escape') { confirmOverlay.classList.remove('show'); _confirmResolve?.(false); }
+    return;
+  }
+
+  const inReader = Reader.el.classList.contains('active');
+
+  if (inReader) {
+    switch (e.key) {
+      case 'ArrowLeft': case 'ArrowUp':
+        e.preventDefault();
+        Reader.navigate(-1);
+        break;
+      case 'ArrowRight': case 'ArrowDown':
+        e.preventDefault();
+        Reader.navigate(1);
+        break;
+      case 'Home':
+        e.preventDefault();
+        Reader.gotoFirst();
+        break;
+      case 'End':
+        e.preventDefault();
+        Reader.gotoLast();
+        break;
+      case 'Escape': case 'b': case 'B':
+        Reader.close();
+        break;
+      case 'f': case 'F':
+        Reader.toggleFullscreen();
+        break;
+      case 'o': case 'O':
+        Reader.cycleViewMode();
+        break;
+      case 'v': case 'V':
+        Reader.toggleRotate();
+        break;
+      case 'Delete':
+        Reader.deleteCurrentPage();
+        break;
+    }
+  } else {
+    // Gallery mode — keyboard navigation
+    switch (e.key) {
+      case 'ArrowRight': {
+        e.preventDefault();
+        GalleryView.kbMove(1);
+        break;
+      }
+      case 'ArrowLeft': {
+        e.preventDefault();
+        GalleryView.kbMove(-1);
+        break;
+      }
+      case 'ArrowDown': {
+        e.preventDefault();
+        GalleryView.kbMove(GalleryView._colCount());
+        break;
+      }
+      case 'ArrowUp': {
+        e.preventDefault();
+        GalleryView.kbMove(-GalleryView._colCount());
+        break;
+      }
+      case 'Enter': {
+        e.preventDefault();
+        GalleryView.kbEnter();
+        break;
+      }
+      case 'Delete':
+      case 'Backspace': {
+        e.preventDefault();
+        GalleryView.kbDelete();
+        break;
+      }
+      case 'b': case 'B': {
+        GalleryView.goBack();
+        break;
+      }
+    }
+  }
+});
+
+/* ═══════════════════════════════════════════════════
+   APP CONTROLLER
+═══════════════════════════════════════════════════ */
+const App = {
+  _prevPath: null,
+
+  async navigate(path, isPopState = false) {
+    // Determine if this path should open reader or gallery
+    const lower = path.toLowerCase();
+    const isZipPath = [...ZIP_EXTS].some(ext => lower.includes('.' + ext));
+
+    // Check if it's a leaf (zip = always reader; dir = try to determine by listing)
+    // Strategy: for zip paths, always open reader.
+    // For dir paths, check if first item is an image — if so, open as reader
+    // Actually we use a simpler heuristic: check if ANY image files exist at this path
+    // We'll load and check
+
+    if (isZipPath) {
+      // Open reader for zip
+      if (!isPopState) {
+        const parts = path.replace(/\/$/, '').split('/');
+        this._prevPath = parts.slice(0, -1).join('/') || '/';
+      }
+      Reader.open(path, true);
+    } else {
+      // Load first page to decide: gallery (dir/zip items) or reader (image files)
+      try {
+        const data = await apiLs(path, { page: 1, page_size: 20 });
+        const hasDirOrZip = data.items.some(it => isDir(it.type) || isZip(it.type));
+        const hasImages = data.items.some(it => it.type === 'file' && isImage(it.name));
+
+        if (hasImages && !hasDirOrZip) {
+          // Pure image directory → open reader
+          if (!isPopState) {
+            const parts = path.replace(/\/$/, '').split('/');
+            this._prevPath = parts.slice(0, -1).join('/') || '/';
+          }
+          Reader.open(path, false);
+        } else {
+          // Show as gallery (may also contain images which will be ignored at gallery level)
+          if (!isPopState) this._prevPath = null;
+          GalleryView.show(path);
+        }
+      } catch (err) {
+        GalleryView.show(path);
+      }
+    }
+  },
+
+  backToGallery() {
+    const galleryPath = this._prevPath || this._parentOf(Router.getPath());
+    Router.push(galleryPath);
+  },
+
+  _parentOf(path) {
+    const parts = path.replace(/\/$/, '').split('/');
+    parts.pop();
+    return parts.join('/') || '/';
+  },
+};
+
+/* ═══════════════════════════════════════════════════
+   BOOT
+═══════════════════════════════════════════════════ */
+GalleryView.init();
+Reader.init();
+App.navigate(Router.getPath(), true);
+</script>
+</body>
+</html>
