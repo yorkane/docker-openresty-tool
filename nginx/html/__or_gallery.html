@@ -517,6 +517,12 @@ const Router = {
     history.pushState({ path }, '', url);
     App.navigate(path);
   },
+  /** Push with a focusName hint — Gallery will restore focus to that card */
+  pushWithFocus(path, focusName) {
+    const url = location.pathname + '?path=' + encodeURIComponent(path);
+    history.pushState({ path }, '', url);
+    App.navigateToGallery(path, focusName);
+  },
   replace(path) {
     const url = location.pathname + '?path=' + encodeURIComponent(path);
     history.replaceState({ path }, '', url);
@@ -547,6 +553,8 @@ const GalleryView = {
 
   // Keyboard focus index (-1 = no focus)
   _kbIdx: -1,
+  // Card name to auto-focus after first page load (used when returning from sub-dir)
+  _focusName: null,
 
   init() {
     document.getElementById('btn-back').addEventListener('click', () => this.goBack());
@@ -649,13 +657,14 @@ const GalleryView = {
     card.querySelector('.del-btn')?.click();
   },
 
-  async show(path) {
+  async show(path, focusName = null) {
     this._path = path;
     this._page = 1;
     this._total = 0;
     this._loading = false;
     this._delMode = false;
     this._kbIdx = -1;
+    this._focusName = focusName;   // card name to auto-focus after load
     this.grid.innerHTML = '';
     this.el.scrollTop = 0;
 
@@ -693,6 +702,17 @@ const GalleryView = {
 
       if (this._page === 1 && items.length === 0) {
         this._showEmpty();
+      }
+
+      // Restore focus to the card we came from (e.g. after pressing Back)
+      if (this._page === 1 && this._focusName) {
+        const cards = this._cards();
+        const idx = cards.findIndex(c => c.dataset.name === this._focusName);
+        if (idx >= 0) {
+          // Use rAF to let layout settle before scrolling
+          requestAnimationFrame(() => this._setFocus(idx, true));
+        }
+        this._focusName = null;
       }
 
       this._page++;
@@ -806,9 +826,10 @@ const GalleryView = {
 
   goBack() {
     const parts = this._path.replace(/\/$/, '').split('/');
+    const currentName = parts[parts.length - 1] || null;
     parts.pop();
     const parent = parts.join('/') || '/';
-    Router.push(parent);
+    Router.pushWithFocus(parent, currentName);
   },
 
   _showEmpty() {
@@ -1237,6 +1258,7 @@ document.addEventListener('keydown', e => {
 ═══════════════════════════════════════════════════ */
 const App = {
   _prevPath: null,
+  _fromName: null,   // name of the card we entered (to restore focus on back)
 
   async navigate(path, isPopState = false) {
     // Determine if this path should open reader or gallery
@@ -1254,6 +1276,7 @@ const App = {
       if (!isPopState) {
         const parts = path.replace(/\/$/, '').split('/');
         this._prevPath = parts.slice(0, -1).join('/') || '/';
+        this._fromName = parts[parts.length - 1] || null;
       }
       Reader.open(path, true);
     } else {
@@ -1268,11 +1291,12 @@ const App = {
           if (!isPopState) {
             const parts = path.replace(/\/$/, '').split('/');
             this._prevPath = parts.slice(0, -1).join('/') || '/';
+            this._fromName = parts[parts.length - 1] || null;
           }
           Reader.open(path, false);
         } else {
           // Show as gallery (may also contain images which will be ignored at gallery level)
-          if (!isPopState) this._prevPath = null;
+          if (!isPopState) { this._prevPath = null; this._fromName = null; }
           GalleryView.show(path);
         }
       } catch (err) {
@@ -1283,7 +1307,15 @@ const App = {
 
   backToGallery() {
     const galleryPath = this._prevPath || this._parentOf(Router.getPath());
-    Router.push(galleryPath);
+    // Pass the name we came from so Gallery can restore focus
+    const fromName = this._fromName;
+    this._fromName = null;
+    Router.pushWithFocus(galleryPath, fromName);
+  },
+
+  /** Directly show gallery at path, then focus card named focusName */
+  navigateToGallery(path, focusName) {
+    GalleryView.show(path, focusName);
   },
 
   _parentOf(path) {
