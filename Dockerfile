@@ -65,6 +65,7 @@ RUN set -eux \
     && luarocks install lua-ffi-zlib      --server="${LUAROCKS_SERVER}" \
     && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
     && luarocks install lua-vips          --server="${LUAROCKS_SERVER}" \
+    && luarocks --tree=/usr/local/openresty/luajit purge --only-not-installed \
     \
     # Ensure lua-vips is in OpenResty LuaJIT's built-in share path.
     # LuaRocks may install it to /usr/local/share/lua/5.1/ (when default tree is /usr/local)
@@ -113,7 +114,7 @@ RUN set -eux \
     # Using cp (not mv) to keep the original OpenResty installation intact.
     && cp /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
     \
-    # Cleanup
+    # Cleanup build dependencies
     && apk del .build-deps \
     \
     # Re-create libvips.so symlink removed by apk del vips-dev.
@@ -123,7 +124,17 @@ RUN set -eux \
     && LIBVIPS_SO=$(ls /usr/lib/libvips.so.[0-9]* 2>/dev/null | sort -V | tail -1) \
     && [ -n "${LIBVIPS_SO}" ] && ln -sf "${LIBVIPS_SO}" /usr/lib/libvips.so || true \
     \
-    && rm -rf /tmp/* /var/cache/apk /root/.cache \
+    # Clean up build artifacts and caches to reduce image size
+    && rm -rf /tmp/* \
+    && rm -rf /var/cache/apk/* \
+    && rm -rf /root/.cache/* \
+    && rm -rf /root/.luarocks/* \
+    && rm -rf /usr/local/share/lua/5.1/doc/* \
+    && rm -rf /usr/local/share/lua/5.1/vips/vips-8*/ \
+    && rm -rf /usr/local/share/man/* \
+    && rm -rf /usr/local/lib/pkgconfig/* \
+    && rm -rf /usr/local/include/* \
+    && find /usr/local -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true \
     && echo 'docker-openresty-tool layer built successfully'
 
 # Copy nginx config files (overrides base image's default nginx config)
