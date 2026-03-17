@@ -44,10 +44,18 @@ RUN set -eux \
     && mkdir -p /data/cache/stale_cache/ && chmod a+rwx /data/ -R \
     \
     # Runtime packages not in base image
-    && apk add --no-cache zziplib-dev vips\
+    && apk add --no-cache \
+        gnu-libiconv \
+        libarchive-tools \
+        zziplib-dev \
+        vips \
     \
     # Build deps only needed for lua C extension compilation
-    && apk add --no-cache build-base git \
+    && apk add --no-cache --virtual .build-deps \
+        build-base \
+        vips-dev \
+        git \
+    \
     # Install LuaRocks packages (--server selects manifest source)
     && luarocks install luasocket         --server="${LUAROCKS_SERVER}" \
     && luarocks install luazip            --server="${LUAROCKS_SERVER}" \
@@ -74,6 +82,7 @@ RUN set -eux \
     # OpenResty lualib path — the canonical location for resty.* / klib.* modules
     && LUALIB=/usr/local/openresty/lualib \
     && cd "${LUA_SHARE}" \
+    && wget -q "${GHRAW}/semyon422/luajit-iconv/master/init.lua" -O libiconv.lua \
     && wget -q "${GHRAW}/spacewander/luafilesystem/master/lfs_ffi.lua" \
     && mkdir -p resty && cd resty \
     && wget -q "${GHRAW}/cloudflare/lua-resty-cookie/master/lib/resty/cookie.lua" \
@@ -103,7 +112,7 @@ RUN set -eux \
     # Copy nginx binary to /usr/local/bin so it's always on PATH
     # regardless of whether ./nginx/ is bind-mounted over the nginx directory.
     # Using cp (not mv) to keep the original OpenResty installation intact.
-    && mv /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
+    && cp /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
     \
     # Clean up build artifacts and caches to reduce image size
     && rm -rf /tmp/* \
@@ -119,7 +128,15 @@ RUN set -eux \
     && find /usr/local -type d -name "vips-*" -exec rm -rf {} + 2>/dev/null || true \
     && find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true \
     # Cleanup build dependencies
-    && apk del build-base git \
+    && apk del .build-deps \
+    \
+    # Re-create libvips.so symlink removed by apk del vips-dev.
+    # lua-vips uses ffi.load("vips") which resolves to libvips.so on Linux.
+    # Alpine's runtime 'vips' package only ships libvips.so.42; unversioned
+    # symlink lives in vips-dev and gets deleted with .build-deps.
+    && LIBVIPS_SO=$(ls /usr/lib/libvips.so.[0-9]* 2>/dev/null | sort -V | tail -1) \
+    && [ -n "${LIBVIPS_SO}" ] && ln -sf "${LIBVIPS_SO}" /usr/lib/libvips.so || true \
+    \
     && echo 'docker-openresty-tool layer built successfully'
 
 # Copy nginx config files (overrides base image's default nginx config)
@@ -128,8 +145,7 @@ COPY ./nginx/ /usr/local/openresty/nginx/
 # Fix permissions
 RUN chmod a+x /usr/local/openresty/nginx/lua/ -R \
     && chmod a+x /usr/local/openresty/nginx/bins/ -R \
-    && chmod 755 /usr/local/openresty/nginx/conf/*.sh \
-    && ln -sf /usr/lib/libvips.so.42 /lib/libvips.so
+    && chmod 755 /usr/local/openresty/nginx/conf/*.sh
 
 WORKDIR /usr/local/openresty/nginx
 
