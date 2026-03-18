@@ -12,6 +12,13 @@ services:
       - NGX_LOG_LEVEL=warn
       - GID=1000
       - UID=1000
+      # /img/ cache configuration (nginx proxy_cache)
+      - OR_IMG_CACHE_VALID=2d      # cache validity time (2d, 7d, 30m, 1h)
+      - OR_IMG_CACHE_MAX=2g        # max disk usage
+      - OR_IMG_CACHE_INACTIVE=60d   # inactive time before removal
+      - OR_IMG_CACHE_PATH=/data/cache  # cache directory
+      - OR_IMG_CACHE_BACKGROUND_UPDATE=on  # background update
+      - OR_IMG_CACHE_USE_STALE=error timeout updating http_500 http_502 http_503 http_504  # stale cache usage
       # - OR_AUTH_USER=admin:admin
     entrypoint: ["sh", "/usr/local/openresty/nginx/conf/entrypoint.sh"]
     volumes:
@@ -19,7 +26,7 @@ services:
       - ./data:/data
       # ⚠️  Do NOT mount ./nginx:/usr/local/openresty/nginx — it shadows sbin/ and
       #     makes nginx unreachable. Mount only the sub-directories you need:
-      - ./nginx/conf/default_app:/usr/local/openresty/nginx/conf/default_app
+      - ./nginx/conf:/usr/local/openresty/nginx/conf
       - ./nginx/html:/usr/local/openresty/nginx/html
       - ./nginx/lua:/usr/local/openresty/nginx/lua
     restart: unless-stopped

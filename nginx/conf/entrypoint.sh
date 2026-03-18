@@ -17,10 +17,12 @@ export NGX_LS_CACHE_SIZE=${NGX_LS_CACHE_SIZE:-20m}   # mlcache L2 hot dict
 export NGX_LS_STALE_SIZE=${NGX_LS_STALE_SIZE:-20m}   # mlcache stale shadow dict
 
 # /img/ HTTP disk cache (nginx proxy_cache)
-export NGX_IMG_CACHE_TTL=${NGX_IMG_CACHE_TTL:-2d}       # cache validity time
-export NGX_IMG_CACHE_MAX=${NGX_IMG_CACHE_MAX:-2g}     # max disk usage
-export NGX_IMG_CACHE_INACTIVE=${NGX_IMG_CACHE_INACTIVE:-60d}  # inactive time before removal
-export NGX_IMG_CACHE_PATH=${NGX_IMG_CACHE_PATH:-/usr/local/openresty/nginx/cache}
+export OR_IMG_CACHE_VALID=${OR_IMG_CACHE_VALID:-2d}    # proxy_cache_valid time
+export OR_IMG_CACHE_MAX=${OR_IMG_CACHE_MAX:-2g}       # max disk usage
+export OR_IMG_CACHE_INACTIVE=${OR_IMG_CACHE_INACTIVE:-60d}  # inactive time before removal
+export OR_IMG_CACHE_PATH=${OR_IMG_CACHE_PATH:-/data/cache}  # cache directory
+export OR_IMG_CACHE_BACKGROUND_UPDATE=${OR_IMG_CACHE_BACKGROUND_UPDATE:-on}  # background update
+export OR_IMG_CACHE_USE_STALE=${OR_IMG_CACHE_USE_STALE:-error timeout updating http_500 http_502 http_503 http_504}  # stale cache usage
 export request_uri='$request_uri'
 export upstream_host='$upstream_host'
 export host='$host'
@@ -46,7 +48,17 @@ fi
 if [ $NGX_OVERWRITE_CONFIG == 'true' ] || [ ! -f "/usr/local/openresty/nginx/conf/nginx.conf" ]; then
 	echo 'No nginx.conf found, building from environment variables'
 	rm /usr/local/openresty/nginx/conf/nginx.conf -f;
-	envsubst < /usr/local/openresty/nginx/conf/tpl.nginx.conf > /usr/local/openresty/nginx/conf/nginx.conf
+
+	# Generate main nginx.conf from template
+	envsubst '$NGX_$OR_' < /usr/local/openresty/nginx/conf/tpl.nginx.conf > /usr/local/openresty/nginx/conf/nginx.conf
+
+	# Generate img_cache.set from template (proxy_cache_path configuration)
+	echo 'Generating /usr/local/openresty/nginx/conf/inc/img_cache.set from template'
+	envsubst '$OR_IMG_CACHE_PATH,$OR_IMG_CACHE_MAX,$OR_IMG_CACHE_INACTIVE,$OR_IMG_CACHE_VALID' < /usr/local/openresty/nginx/conf/tpl.img_cache.set > /usr/local/openresty/nginx/conf/inc/img_cache.set
+
+	# Generate img.conf from template (location /img/ configuration)
+	echo 'Generating /usr/local/openresty/nginx/conf/default_app/img.conf from template'
+	envsubst '$OR_IMG_CACHE_VALID,$OR_IMG_CACHE_BACKGROUND_UPDATE,$OR_IMG_CACHE_USE_STALE' < /usr/local/openresty/nginx/conf/tpl.img.conf > /usr/local/openresty/nginx/conf/default_app/img.conf
 fi
 
 

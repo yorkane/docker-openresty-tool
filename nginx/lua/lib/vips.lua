@@ -16,16 +16,11 @@
 --
 -- Source root: $webdav_root (same as WebDAV)
 --
--- Caching (via lib/imgcache.lua):
---   - Cache key includes source file mtime → original file change auto-invalidates cache
---   - Cache filename encodes expiry epoch  → TTL check without extra stat
---   - Periodic GC timer (registered in init_worker.lua) purges expired files
---     and evicts LRU files when total size exceeds NGX_IMG_CACHE_MAX
---   - X-Cache-Status: HIT | MISS | BYPASS on every response
+-- Caching: Handled entirely by nginx proxy_cache in main.conf
+--   - Nginx handles all caching logic
+--   - No cache-related logic in Lua
 
 local _M = {}
-
-local imgcache = require("lib.imgcache")
 
 -- ── MIME / format tables ───────────────────────────────────────────────────────
 
@@ -121,11 +116,11 @@ function _M.handle(webdav_root)
 
     local src_ext = ext_of(rel):lower()
 
-    -- ── Fast path: no processing params → serve original, no cache ────────────
+    -- ── Fast path: no processing params → serve original ──────────────────
     if not w and not h and not fmt and not crop_str then
-        ngx.header["Content-Type"]   = mime_map[src_ext] or "application/octet-stream"
-        ngx.header["X-Vips"]         = "passthrough"
-        ngx.header["X-Cache-Status"] = "BYPASS"
+        ngx.header["Content-Type"] = mime_map[src_ext] or "application/octet-stream"
+        ngx.header["X-Vips"] = "passthrough"
+        ngx.header["Cache-Control"] = "public, max-age=86400"
         local fh   = io.open(src_path, "rb")
         local data = fh:read("*a")
         fh:close()
@@ -133,23 +128,7 @@ function _M.handle(webdav_root)
         return
     end
 
-    -- Determine output extension (needed for cache key before processing)
-    local _, _, out_ext = build_save_suffix(fmt, q, src_ext)
-
-    -- ── Cache HIT? ────────────────────────────────────────────────────────────
-    local cached, cache_path = imgcache.get(src_path, uri, args, out_ext)
-    if cached then
-        local ct = mime_map[out_ext] or "application/octet-stream"
-        ngx.header["Content-Type"]   = ct
-        ngx.header["Content-Length"] = #cached
-        ngx.header["X-Vips"]         = "cache-hit"
-        ngx.header["X-Cache-Status"] = "HIT"
-        ngx.header["Cache-Control"]  = "public, max-age=86400"
-        ngx.print(cached)
-        return
-    end
-
-    -- ── Cache MISS: process via libvips ───────────────────────────────────────
+    -- ── Process via libvips ─────────────────────────────────────────────────
     local ok, vips = pcall(require, "vips")
     if not ok then
         ngx.log(ngx.ERR, "[vips] lua-vips not available: ", vips)
@@ -247,10 +226,6 @@ function _M.handle(webdav_root)
     ngx.header["X-Vips"]         = "processed"
     ngx.header["X-Vips-Size"]    = img:width() .. "x" .. img:height()
     ngx.header["Cache-Control"]  = "public, max-age=86400"
-    ngx.header["X-Cache-Status"] = "MISS"
-
-    -- Write to disk cache (best-effort; GC timer handles cleanup)
-    imgcache.put(src_path, uri, args, out_ext, buf)
 
     ngx.print(buf)
 end
