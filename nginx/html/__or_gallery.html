@@ -139,6 +139,37 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 /* sentinel for infinite scroll */
 #gallery-sentinel { height: 1px; width: 100%; }
 
+/* ─── Pagination ─── */
+#gallery-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 12px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+}
+#gallery-pagination.hidden { display: none; }
+#gallery-pagination .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 36px; height: 36px; padding: 0 12px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); cursor: pointer;
+  font-size: 14px; transition: background .15s;
+}
+#gallery-pagination .btn:hover:not(:disabled) { background: #333; }
+#gallery-pagination .btn:disabled { opacity: .4; cursor: not-allowed; }
+#gallery-pagination .btn.active { background: var(--accent); color: #111; border-color: var(--accent); }
+#gallery-pagination .page-info { color: var(--text2); font-size: 13px; min-width: 80px; text-align: center; }
+#gallery-pagination .page-jump { display: flex; align-items: center; gap: 6px; }
+#gallery-pagination .page-jump input {
+  width: 50px; height: 32px; padding: 0 8px;
+  border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+  font-size: 14px; text-align: center;
+}
+#gallery-pagination .page-jump input:focus { outline: none; border-color: var(--accent); }
+
 /* ─── Reader View ─── */
 #reader-view {
   flex: 1; position: relative; overflow: hidden;
@@ -282,6 +313,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div id="gallery-view">
     <div id="gallery-grid"></div>
     <div id="gallery-sentinel"></div>
+    <!-- Pagination -->
+    <div id="gallery-pagination" class="hidden">
+      <button class="btn" id="pg-first" title="首页">««</button>
+      <button class="btn" id="pg-prev" title="上一页">←</button>
+      <div class="page-info" id="pg-info">1 / 1</div>
+      <button class="btn" id="pg-next" title="下一页">→</button>
+      <button class="btn" id="pg-last" title="末页">»»</button>
+      <div class="page-jump">
+        <input type="number" id="pg-input" min="1" value="1">
+        <button class="btn" id="pg-go">Go</button>
+      </div>
+    </div>
   </div>
 
   <!-- ─── Status (empty/error) ─── -->
@@ -559,13 +602,15 @@ const GalleryView = {
   grid: document.getElementById('gallery-grid'),
   sentinel: document.getElementById('gallery-sentinel'),
   toolbar: document.getElementById('toolbar'),
+  pagination: null, // set in init()
 
   _path: '/',
   _page: 1,
   _total: 0,
+  _pageSize: 16,  // fixed page size
+  _totalPages: 0,
   _loading: false,
   _delMode: false,
-  _observer: null,
 
   // IntersectionObserver for cover lazy-loading
   _coverObserver: null,
@@ -575,15 +620,30 @@ const GalleryView = {
   // Card name to auto-focus after first page load (used when returning from sub-dir)
   _focusName: null,
 
-  // ── Scroll position cache ─────────────────────────────────────────────
-  // Save scroll position when leaving gallery (entering reader)
-  // Key: path, Value: scrollTop
-  _scrollCache: new Map(),
-  _SCROLL_CACHE_MAX: 20,
+  // ── Page cache ─────────────────────────────────────────────
+  // Save page number when leaving gallery (entering reader)
+  // Key: path, Value: pageNumber
+  _pageCache: new Map(),
+  _PAGE_CACHE_MAX: 20,
 
   init() {
     document.getElementById('btn-back').addEventListener('click', () => this.goBack());
     document.getElementById('btn-del-mode').addEventListener('click', () => this.toggleDelMode());
+
+    // Pagination elements
+    this.pagination = document.getElementById('gallery-pagination');
+    document.getElementById('pg-first').addEventListener('click', () => this.goToPage(1));
+    document.getElementById('pg-prev').addEventListener('click', () => this.goToPage(this._page - 1));
+    document.getElementById('pg-next').addEventListener('click', () => this.goToPage(this._page + 1));
+    document.getElementById('pg-last').addEventListener('click', () => this.goToPage(this._totalPages));
+    document.getElementById('pg-go').addEventListener('click', () => {
+      const input = document.getElementById('pg-input');
+      const page = parseInt(input.value, 10);
+      if (page >= 1 && page <= this._totalPages) this.goToPage(page);
+    });
+    document.getElementById('pg-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('pg-go').click();
+    });
 
     // Click on grid clears kb-focus
     this.grid.addEventListener('click', () => {});
@@ -596,11 +656,6 @@ const GalleryView = {
         if (idx !== -1 && idx !== this._kbIdx) this._setFocus(idx, false);
       }
     });
-
-    // Infinite scroll observer
-    this._observer = new IntersectionObserver(entries => {
-      if (entries[0].isIntersecting && !this._loading) this.loadMore();
-    }, { rootMargin: '200px' });
 
     // Cover lazy-load observer
     this._coverObserver = new IntersectionObserver(entries => {
@@ -683,26 +738,22 @@ const GalleryView = {
   },
 
   async show(path, focusName = null) {
-    // Save scroll position for previous path before switching
+    // Save page number for previous path before switching
     if (this._path && this._path !== path) {
-      this._saveScrollPos(this._path);
+      this._savePageNum(this._path, this._page);
     }
 
     this._path = path;
-    this._page = 1;
     this._total = 0;
+    this._totalPages = 0;
     this._loading = false;
     this._delMode = false;
     this._kbIdx = -1;
-    this._focusName = focusName;   // card name to auto-focus after load
-    this._restoreScrollTop = null; // reset before loading
+    this._focusName = focusName;
 
-    // Get saved scroll position for this path (if any)
-    // This is used as fallback if _focusName is not found
-    const savedScrollTop = this._getScrollPos(path);
-    if (savedScrollTop) {
-      this._restoreScrollTop = savedScrollTop;
-    }
+    // Get saved page number for this path
+    const savedPage = this._getPageNum(path);
+    this._page = savedPage || 1;
 
     this.grid.innerHTML = '';
     this.el.scrollTop = 0;
@@ -717,40 +768,49 @@ const GalleryView = {
     document.getElementById('status-msg').classList.remove('show');
     document.getElementById('toolbar').style.display = '';
 
-    this._observer.observe(this.sentinel);
-    await this.loadMore();
+    await this.loadPage();
   },
 
-  /** Save scroll position for a path */
-  _saveScrollPos(path) {
-    if (!path || this.el.scrollTop === 0) return;
-    this._scrollCache.set(path, this.el.scrollTop);
-    // Trim cache if too large
-    if (this._scrollCache.size > this._SCROLL_CACHE_MAX) {
-      const firstKey = this._scrollCache.keys().next().value;
-      this._scrollCache.delete(firstKey);
+  /** Save page number for a path */
+  _savePageNum(path, page) {
+    if (!path || page === 1) return; // don't save default page
+    this._pageCache.set(path, page);
+    if (this._pageCache.size > this._PAGE_CACHE_MAX) {
+      const firstKey = this._pageCache.keys().next().value;
+      this._pageCache.delete(firstKey);
     }
   },
 
-  /** Get and clear saved scroll position for a path */
-  _getScrollPos(path) {
-    const pos = this._scrollCache.get(path);
-    if (pos !== undefined) {
-      this._scrollCache.delete(path);
+  /** Get and clear saved page number for a path */
+  _getPageNum(path) {
+    const page = this._pageCache.get(path);
+    if (page !== undefined) {
+      this._pageCache.delete(path);
     }
-    return pos;
+    return page;
   },
 
-  async loadMore() {
+  /** Navigate to a specific page */
+  goToPage(page) {
+    if (page < 1 || page > this._totalPages || page === this._page) return;
+    this._page = page;
+    this.grid.innerHTML = '';
+    this.el.scrollTop = 0;
+    this._kbIdx = -1;
+    this._focusName = null;
+    this.loadPage();
+  },
+
+  async loadPage() {
     if (this._loading) return;
-    if (this._page > 1 && this._page * 50 >= this._total) return;
 
     this._loading = true;
     this._appendSkeletons(4);
 
     try {
-      const data = await apiLs(this._path, { page: this._page, page_size: 50 });
+      const data = await apiLs(this._path, { page: this._page, page_size: this._pageSize });
       this._total = data.total;
+      this._totalPages = Math.ceil(data.total / this._pageSize);
 
       // Remove skeletons
       this.grid.querySelectorAll('.card.skeleton').forEach(el => el.remove());
@@ -761,48 +821,40 @@ const GalleryView = {
 
       if (this._page === 1 && items.length === 0) {
         this._showEmpty();
+        this.pagination.classList.add('hidden');
+      } else {
+        this._updatePagination();
+        this.pagination.classList.remove('hidden');
       }
 
-      // ── Restore focus or scroll position ───────────────────────────────
-      // Priority: _focusName > _restoreScrollTop
+      // Restore focus to the card we came from
       if (this._focusName) {
         const cards = this._cards();
         const idx = cards.findIndex(c => c.dataset.name === this._focusName);
         if (idx >= 0) {
-          // Found! Scroll to the card and clear saved scroll position
           requestAnimationFrame(() => this._setFocus(idx, true));
-          this._focusName = null;
-          this._restoreScrollTop = null; // focusName takes priority
-        } else if (this._page * 50 >= this._total) {
-          // Reached end without finding, give up focusName but keep scrollPos
-          this._focusName = null;
         }
-        // else: not found yet, continue loading more pages
+        this._focusName = null;
       }
 
-      // Restore scroll position if needed (after focusName is resolved or not set)
-      if (this._restoreScrollTop && !this._focusName) {
-        const contentHeight = this.grid.scrollHeight;
-        const viewportHeight = this.el.clientHeight;
-        // If we have enough content to scroll, or we've loaded all items
-        if (contentHeight > this._restoreScrollTop + viewportHeight || this._page * 50 >= this._total) {
-          this.el.scrollTop = this._restoreScrollTop;
-          this._restoreScrollTop = null;
-        }
-        // else: need to load more content, continue in next loadMore()
-      }
-
-      this._page++;
     } catch (err) {
       this.grid.querySelectorAll('.card.skeleton').forEach(el => el.remove());
       this._showError(err.message);
+      this.pagination.classList.add('hidden');
     } finally {
       this._loading = false;
     }
   },
 
-  // Saved scroll position to restore (cleared after restoration)
-  _restoreScrollTop: null,
+  _updatePagination() {
+    document.getElementById('pg-info').textContent = `${this._page} / ${this._totalPages || 1}`;
+    document.getElementById('pg-input').value = this._page;
+    document.getElementById('pg-input').max = this._totalPages;
+    document.getElementById('pg-first').disabled = this._page <= 1;
+    document.getElementById('pg-prev').disabled = this._page <= 1;
+    document.getElementById('pg-next').disabled = this._page >= this._totalPages;
+    document.getElementById('pg-last').disabled = this._page >= this._totalPages;
+  },
 
   _appendSkeletons(n) {
     for (let i = 0; i < n; i++) {
@@ -1186,8 +1238,8 @@ const Reader = {
   },
 
   async open(path, isZipPath) {
-    // Save Gallery scroll position before switching to Reader
-    GalleryView._saveScrollPos(GalleryView._path);
+    // Save Gallery page number before switching to Reader
+    GalleryView._savePageNum(GalleryView._path, GalleryView._page);
 
     this._path = path;
     this._isZip = isZipPath;
