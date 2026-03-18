@@ -469,6 +469,28 @@ async function apiRm(path) {
 }
 
 /**
+ * Fetch all gallery items (dirs and zips) from a path.
+ * Used for sibling navigation in Reader.
+ * @param {string} path
+ */
+async function fetchAllGalleryItems(path) {
+  const PAGE = 100;
+  let page = 1, all = [];
+  while (true) {
+    const data = await apiLs(path, { page, page_size: PAGE });
+    for (const it of data.items) {
+      if (isDir(it.type) || isZip(it.type)) {
+        all.push(it);
+      }
+    }
+    if (data.page * data.page_size >= data.total || data.items.length === 0) break;
+    page++;
+  }
+  // Sort by name (natural sort)
+  return all.sort((a, b) => naturalSort(a.name, b.name));
+}
+
+/**
  * Fetch ALL images in a path, handling pagination.
  * @param {string}  path      — directory or zip path
  * @param {boolean} recursive — when true, descend into sub-directories (used for zip reader)
@@ -1314,6 +1336,48 @@ const Reader = {
     App.backToGallery();
   },
 
+  /** Go to previous/next gallery in parent directory */
+  async goToSibling(delta) {
+    // delta: -1 = previous, 1 = next
+    const parentPath = App._prevPath || App._parentOf(this._path);
+    const currentName = App._fromName || this._path.split('/').pop();
+
+    // Fetch all items in parent directory
+    try {
+      const items = await fetchAllGalleryItems(parentPath);
+      if (!items.length) return;
+
+      // Find current item index
+      const idx = items.findIndex(it => it.name === currentName);
+      if (idx === -1) return;
+
+      // Calculate sibling index
+      const siblingIdx = idx + delta;
+      if (siblingIdx < 0 || siblingIdx >= items.length) {
+        showOsd(delta < 0 ? '已经是第一个' : '已经是最后一个', 1500);
+        return;
+      }
+
+      // Navigate to sibling
+      const sibling = items[siblingIdx];
+      const siblingPath = joinPath(parentPath, sibling.name);
+
+      // Save focus info for return
+      App._prevPath = parentPath;
+      App._fromName = sibling.name;
+
+      // Open sibling gallery
+      const isZipItem = isZip(sibling.type);
+      await this.open(siblingPath, isZipItem);
+
+    } catch (err) {
+      showOsd('切换失败: ' + err.message, 2000);
+    }
+  },
+
+  goToPrevGallery() { return this.goToSibling(-1); },
+  goToNextGallery() { return this.goToSibling(1); },
+
   _renderPage(direction = 0) {
     // Clear canvas
     this.canvas.querySelectorAll('.page-img-wrap').forEach(el => el.remove());
@@ -1630,6 +1694,12 @@ document.addEventListener('keydown', e => {
       case 'Delete':
         Reader.deleteCurrentPage();
         break;
+      case '[':
+        Reader.goToPrevGallery();
+        break;
+      case ']':
+        Reader.goToNextGallery();
+        break;
     }
   } else {
     // Gallery mode — keyboard navigation
@@ -1667,6 +1737,16 @@ document.addEventListener('keydown', e => {
       }
       case 'b': case 'B': {
         GalleryView.goBack();
+        break;
+      }
+      case '[': {
+        e.preventDefault();
+        GalleryView.goToPage(GalleryView._page - 1);
+        break;
+      }
+      case ']': {
+        e.preventDefault();
+        GalleryView.goToPage(GalleryView._page + 1);
         break;
       }
     }
