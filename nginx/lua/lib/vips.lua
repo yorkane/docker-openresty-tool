@@ -90,8 +90,8 @@ end
 
 function _M.handle(webdav_root)
     local uri = ngx.var.uri
-    -- Strip /img/ prefix
-    local rel = uri:match("^/img/(.+)$")
+    -- Strip /img/ or /img_internal/ prefix (internal proxy loop uses /img_internal/)
+    local rel = uri:match("^/img/(.+)$") or uri:match("^/img_internal/img/(.+)$")
     if not rel then
         return ngx.exit(ngx.HTTP_NOT_FOUND)
     end
