@@ -50,7 +50,8 @@ if [ $NGX_OVERWRITE_CONFIG == 'true' ] || [ ! -f "/usr/local/openresty/nginx/con
 	rm /usr/local/openresty/nginx/conf/nginx.conf -f;
 
 	# Generate main nginx.conf from template
-	envsubst '$NGX_$OR_' < /usr/local/openresty/nginx/conf/tpl.nginx.conf > /usr/local/openresty/nginx/conf/nginx.conf
+	# List all variables that need to be substituted in tpl.nginx.conf
+	envsubst '$NGX_PID,$NGX_CACHE_SIZE,$NGX_LS_CACHE_SIZE,$NGX_LS_STALE_SIZE,$NGX_DNS,$NGX_DNS_TIMEOUT,$NGX_LOG_LEVEL,$NGX_APP,$NGX_HOST,$NGX_PORT' < /usr/local/openresty/nginx/conf/tpl.nginx.conf > /usr/local/openresty/nginx/conf/nginx.conf
 
 	# Generate img_cache.set from template (proxy_cache_path configuration)
 	echo 'Generating /usr/local/openresty/nginx/conf/inc/img_cache.set from template'
