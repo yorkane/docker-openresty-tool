@@ -76,7 +76,7 @@ printenv | grep -E "^(NGX_|OR_|OPENRESTY_)" \
 | sed -r 's/((NGX|OR|OPENRESTY)_[^=]+)=(.+)/\1="\3",/' \
 | sed -r 's/="([1-9]+\.?[0-9]+)"/=\1/' \
 | sed -r 's/="([1-9]+)"/=\1/' \
-| sed -r 's/="(true|false)"/=\1/' \
+| sed -r 's/="(true|false|auto)"/=\1/' \
 >> env.lua
 
 echo -e "INIT_AT_UTC = ngx.utctime(),\ngenerated = '`date`'\n}\n" >> env.lua
