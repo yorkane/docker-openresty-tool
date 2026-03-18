@@ -575,6 +575,12 @@ const GalleryView = {
   // Card name to auto-focus after first page load (used when returning from sub-dir)
   _focusName: null,
 
+  // ── Scroll position cache ─────────────────────────────────────────────
+  // Save scroll position when leaving gallery (entering reader)
+  // Key: path, Value: scrollTop
+  _scrollCache: new Map(),
+  _SCROLL_CACHE_MAX: 20,
+
   init() {
     document.getElementById('btn-back').addEventListener('click', () => this.goBack());
     document.getElementById('btn-del-mode').addEventListener('click', () => this.toggleDelMode());
@@ -677,6 +683,11 @@ const GalleryView = {
   },
 
   async show(path, focusName = null) {
+    // Save scroll position for previous path before switching
+    if (this._path && this._path !== path) {
+      this._saveScrollPos(this._path);
+    }
+
     this._path = path;
     this._page = 1;
     this._total = 0;
@@ -701,6 +712,26 @@ const GalleryView = {
     await this.loadMore();
   },
 
+  /** Save scroll position for a path */
+  _saveScrollPos(path) {
+    if (!path || this.el.scrollTop === 0) return;
+    this._scrollCache.set(path, this.el.scrollTop);
+    // Trim cache if too large
+    if (this._scrollCache.size > this._SCROLL_CACHE_MAX) {
+      const firstKey = this._scrollCache.keys().next().value;
+      this._scrollCache.delete(firstKey);
+    }
+  },
+
+  /** Get and clear saved scroll position for a path */
+  _getScrollPos(path) {
+    const pos = this._scrollCache.get(path);
+    if (pos !== undefined) {
+      this._scrollCache.delete(path);
+    }
+    return pos;
+  },
+
   async loadMore() {
     if (this._loading) return;
     if (this._page > 1 && this._page * 50 >= this._total) return;
@@ -723,15 +754,39 @@ const GalleryView = {
         this._showEmpty();
       }
 
-      // Restore focus to the card we came from (e.g. after pressing Back)
-      if (this._page === 1 && this._focusName) {
+      // ── Restore focus or scroll position ───────────────────────────────
+      // Check if we have a focusName to restore (keep checking until found)
+      if (this._focusName) {
         const cards = this._cards();
         const idx = cards.findIndex(c => c.dataset.name === this._focusName);
         if (idx >= 0) {
-          // Use rAF to let layout settle before scrolling
+          // Found! Scroll to the card
           requestAnimationFrame(() => this._setFocus(idx, true));
+          this._focusName = null;
+        } else if (this._page * 50 >= this._total) {
+          // Reached end without finding, give up
+          this._focusName = null;
         }
-        this._focusName = null;
+        // else: not found yet, continue loading more pages
+      }
+      // Check if we have a saved scroll position to restore
+      else if (this._page === 1) {
+        const savedScrollTop = this._getScrollPos(this._path);
+        if (savedScrollTop) {
+          this._restoreScrollTop = savedScrollTop;
+        }
+      }
+
+      // Check if we need to restore scroll position
+      if (this._restoreScrollTop) {
+        const contentHeight = this.grid.scrollHeight;
+        const viewportHeight = this.el.clientHeight;
+        // If we have enough content to scroll, or we've loaded all items
+        if (contentHeight > this._restoreScrollTop + viewportHeight || this._page * 50 >= this._total) {
+          this.el.scrollTop = this._restoreScrollTop;
+          this._restoreScrollTop = null;
+        }
+        // else: need to load more content, continue in next loadMore()
       }
 
       this._page++;
@@ -742,6 +797,9 @@ const GalleryView = {
       this._loading = false;
     }
   },
+
+  // Saved scroll position to restore (cleared after restoration)
+  _restoreScrollTop: null,
 
   _appendSkeletons(n) {
     for (let i = 0; i < n; i++) {
@@ -1125,6 +1183,9 @@ const Reader = {
   },
 
   async open(path, isZipPath) {
+    // Save Gallery scroll position before switching to Reader
+    GalleryView._saveScrollPos(GalleryView._path);
+
     this._path = path;
     this._isZip = isZipPath;
     this._double = Settings.get('doublePages');
