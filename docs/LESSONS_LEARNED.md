@@ -10,6 +10,9 @@
 | 2 | 变量未替换 | nginx 配置中残留 `$NGX_*` 变量 | envsubst 参数语法错误 | 显式列出所有变量 |
 | 3 | 语法错误 | nginx 报 `unexpected "}"` | 编辑残留代码片段 | 清理多余代码行 |
 | 4 | API 丢失 | `/api/ls/` 返回 404 | 修复语法时误删 location | 恢复 location 配置 |
+| 5 | 缓存失效 | proxy_cache 不缓存 Lua 生成内容 | proxy_cache 仅缓存 proxy_pass 响应 | 内部代理循环架构 |
+| 6 | URL 解码 | 空格/特殊字符导致 400 错误 | `$uri` 变量自动解码 URL | 使用 rewrite 指令保留编码 |
+| 7 | URL 编码 | `#` 字符导致 gallery 异常 | API 调用未编码 path 参数 | 使用 encodeFilePath 编码 |
 
 ---
 
@@ -119,6 +122,136 @@ HTTP 404 Not Found: {"error":"not_found","message":"no such API endpoint"}
 > 1. 使用 `git diff` 检查变更范围
 > 2. 对照备份或版本历史
 > 3. 不要删除与修复目标无关的代码
+
+---
+
+### 问题 5: proxy_cache 不缓存 Lua 生成内容
+
+**错误信息:**
+```
+x-vips: processed  # 始终显示 processed，从未显示 cached
+```
+
+**原因分析:**
+- nginx `proxy_cache` 指令仅缓存 `proxy_pass` 上游响应
+- `content_by_lua_block` 直接生成响应，不经过 proxy_pass
+- 因此 proxy_cache 永远不会缓存 Lua 生成的内容
+
+**核心规则:**
+> ⚠️ **禁止使用 Lua 实现图片缓存** - 必须使用 nginx 原生 proxy_cache
+
+**解决方案 - 内部代理循环架构:**
+
+```
+用户请求 → /img/ location
+              ↓
+         proxy_pass → 127.0.0.1:81/img_internal/
+              ↓
+         proxy_cache 在此处缓存响应
+              ↓
+         /img_internal/ location → content_by_lua_block
+              ↓
+         Lua 生成图片 → 返回给 proxy_pass
+              ↓
+         proxy_cache 缓存 → 返回用户
+```
+
+**配置示例:**
+```nginx
+# 外部访问的 /img/ location
+location /img/ {
+    proxy_pass http://127.0.0.1:81/img_internal/img/;
+    proxy_cache img_cache;
+    proxy_cache_valid 200 30d;
+    ...
+}
+
+# 内部服务端点（监听 127.0.0.1:81）
+server {
+    listen 127.0.0.1:81;
+    location /img_internal/img/ {
+        content_by_lua_block {
+            local vips = require('lib.vips')
+            vips.handle(ngx.var.webdav_root)
+        }
+    }
+}
+```
+
+**教训:**
+> ⚠️ nginx 缓存机制：
+> - `proxy_cache`: 只缓存 `proxy_pass` 响应
+> - `fastcgi_cache`: 只缓存 `fastcgi_pass` 响应
+> - Lua 直接生成的内容不会被任何缓存模块捕获
+
+---
+
+### 问题 6: URL 空格/特殊字符导致 400 错误
+
+**错误信息:**
+```
+172.29.12.16 - aria [18/Mar/2026:16:36:11 +0800] "GET /img/.../%5BNWORKS%5D%20Vol.20... HTTP/1.1" 400 154
+```
+
+**原因分析:**
+- 使用 `proxy_pass http://127.0.0.1:81/img_internal$uri;`
+- nginx `$uri` 变量会自动解码 URL 编码
+- `%20`（空格）被解码为实际的空格字符
+- 空格在 URL 路径中是不合法的，导致 400 Bad Request
+
+**错误代码:**
+```nginx
+proxy_pass http://127.0.0.1:81/img_internal$uri;  # ❌ $uri 会解码
+```
+
+**修复:**
+```nginx
+# 使用 rewrite 指令，保留原始 URL 编码
+rewrite ^(.*)$ /img_internal$1 break;
+proxy_pass http://127.0.0.1:81;
+```
+
+**教训:**
+> ⚠️ nginx 变量行为：
+> - `$uri`: 解码后的路径（空格变成实际空格字符）
+> - `$request_uri`: 原始请求 URI（保留编码）
+> - `rewrite`: 保留原始编码，不会解码
+
+---
+
+### 问题 7: # 字符导致 Gallery 浏览异常
+
+**错误信息:**
+```
+访问 /__or_gallery?path=/aria2_2/======/#SayoMomo/... 异常
+```
+
+**原因分析:**
+- JavaScript 代码中 API 调用直接拼接 path，未编码
+- `#` 字符在 URL 中是 fragment 标识符
+- 未编码时被浏览器当作 fragment 处理，请求不完整
+
+**错误代码:**
+```javascript
+// ❌ 直接拼接 path
+const url = '/api/ls' + path + '?' + params;
+```
+
+**修复:**
+```javascript
+// ✓ 编码每个路径段
+const url = '/api/ls' + encodeFilePath(path) + '?' + params;
+
+function encodeFilePath(p) {
+  return p.split('/').map(s => s ? encodeURIComponent(s) : s).join('/');
+}
+```
+
+**教训:**
+> ⚠️ URL 编码规则：
+> - 特殊字符 `#`, `?`, `&`, `=`, ` ` 等必须编码
+> - 路径段应分别编码，保留 `/` 分隔符
+> - 已编码的路径可被服务器正确解码
 
 ---
 

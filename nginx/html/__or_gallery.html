@@ -405,7 +405,8 @@ async function apiLs(path, opts = {}) {
     page: String(opts.page ?? 1),
     page_size: String(opts.page_size ?? 50),
   });
-  const url = '/api/ls' + (path.startsWith('/') ? path : '/' + path) + '?' + params;
+  // Encode path segments to handle special chars like # in directory names
+  const url = '/api/ls' + encodeFilePath(path.startsWith('/') ? path : '/' + path) + '?' + params;
   const res = await fetch(url);
   if (!res.ok) {
     const json = await res.json().catch(() => ({}));
@@ -415,7 +416,8 @@ async function apiLs(path, opts = {}) {
 }
 
 async function apiRm(path) {
-  const res = await fetch('/api/rm' + (path.startsWith('/') ? path : '/' + path), { method: 'DELETE' });
+  // Encode path segments to handle special chars like # in directory names
+  const res = await fetch('/api/rm' + encodeFilePath(path.startsWith('/') ? path : '/' + path), { method: 'DELETE' });
   if (!res.ok) {
     const json = await res.json().catch(() => ({}));
     throw new Error(json.message || `HTTP ${res.status}`);

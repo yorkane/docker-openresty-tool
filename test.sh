@@ -308,6 +308,31 @@ test_bug_regression() {
     else
         fail "/api/ls/ location 缺失"
     fi
+    
+    # 测试 URL 特殊字符处理
+    print_test "回归测试: img.conf 使用 rewrite 保留 URL 编码"
+    if grep -q "rewrite.*img_internal" "$PROJECT_DIR/nginx/conf/tpl.img.conf"; then
+        pass "img.conf 使用 rewrite 指令保留 URL 编码"
+    else
+        fail "img.conf 未使用 rewrite，URL 特殊字符可能被解码"
+    fi
+    
+    # 测试 Gallery encodeFilePath 使用
+    print_test "回归测试: Gallery API 调用使用 encodeFilePath"
+    if grep -q "encodeFilePath.*path" "$PROJECT_DIR/nginx/html/__or_gallery.html"; then
+        pass "Gallery API 调用正确编码 path 参数"
+    else
+        fail "Gallery API 调用未编码 path，# 等特殊字符会出问题"
+    fi
+    
+    # 测试内部代理循环架构
+    print_test "回归测试: 内部代理循环架构完整性"
+    if grep -q "listen.*127.0.0.1:81" "$PROJECT_DIR/nginx/conf/tpl.nginx.conf" && \
+       grep -q "location /img_internal" "$PROJECT_DIR/nginx/conf/tpl.nginx.conf"; then
+        pass "内部代理循环架构配置完整"
+    else
+        fail "内部代理循环架构配置缺失"
+    fi
 }
 
 # =============================================================================
