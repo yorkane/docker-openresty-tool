@@ -915,6 +915,124 @@ const Reader = {
   _SCALE_MIN: 0.1,
   _SCALE_MAX: 10,
 
+  // ── Image Cache & Preload ───────────────────────────────────────────
+  // Cache pool: keeps loaded images in memory for instant switching
+  // Uses Map<url, {img: HTMLImageElement, loaded: boolean, loading: boolean}>
+  _imgCache: new Map(),
+  _CACHE_SIZE: 10,          // max images to keep in cache
+  _preloadQueue: [],        // pending preload URLs
+  _preloadAbort: false,     // flag to abort current preload batch
+
+  /** Get cached image or create new one */
+  _getCachedImg(url) {
+    let entry = this._imgCache.get(url);
+    if (!entry) {
+      entry = { img: new Image(), loaded: false, loading: false };
+      this._imgCache.set(url, entry);
+      this._trimCache();
+    }
+    return entry;
+  },
+
+  /** Trim cache to max size (LRU: remove oldest entries) */
+  _trimCache() {
+    if (this._imgCache.size <= this._CACHE_SIZE) return;
+    // Keep current page and neighbors, remove others
+    const keepUrls = new Set();
+    const step = this._double ? 2 : 1;
+    for (let i = Math.max(0, this._idx - 2); i <= Math.min(this._images.length - 1, this._idx + step + 2); i++) {
+      if (this._images[i]) keepUrls.add(this._images[i].url);
+    }
+    // Remove entries not in keepUrls
+    for (const [url] of this._imgCache) {
+      if (!keepUrls.has(url) && this._imgCache.size > this._CACHE_SIZE) {
+        this._imgCache.delete(url);
+      }
+    }
+  },
+
+  /** Load an image with promise */
+  _loadImg(url) {
+    return new Promise((resolve, reject) => {
+      const entry = this._getCachedImg(url);
+      if (entry.loaded) {
+        resolve(entry.img);
+        return;
+      }
+      if (entry.loading) {
+        // Wait for existing load
+        const checkLoaded = () => {
+          if (entry.loaded) resolve(entry.img);
+          else if (entry.img.onerror) reject(new Error('load failed'));
+          else requestAnimationFrame(checkLoaded);
+        };
+        checkLoaded();
+        return;
+      }
+      entry.loading = true;
+      entry.img.onload = () => {
+        entry.loaded = true;
+        entry.loading = false;
+        resolve(entry.img);
+      };
+      entry.img.onerror = () => {
+        entry.loading = false;
+        reject(new Error('Failed to load ' + url));
+      };
+      entry.img.src = url;
+    });
+  },
+
+  /** Smart preload: preload images around current index based on direction */
+  _smartPreload(direction = 0) {
+    // direction: -1 = going backward, 0 = unknown, 1 = going forward
+    this._preloadAbort = true;  // abort previous batch
+    this._preloadQueue = [];
+
+    const step = this._double ? 2 : 1;
+    const urls = [];
+
+    // Always preload immediate neighbors
+    for (let i = this._idx - 1; i <= this._idx + step; i++) {
+      if (i >= 0 && i < this._images.length) {
+        urls.push(this._images[i].url);
+      }
+    }
+
+    // Preload ahead based on direction
+    if (direction >= 0) {
+      // Going forward or unknown: preload next 5 pages
+      for (let i = this._idx + step; i < Math.min(this._images.length, this._idx + step + 5); i++) {
+        if (!urls.includes(this._images[i].url)) urls.push(this._images[i].url);
+      }
+    }
+    if (direction <= 0) {
+      // Going backward or unknown: preload previous 3 pages
+      for (let i = Math.max(0, this._idx - 4); i < this._idx; i++) {
+        if (!urls.includes(this._images[i].url)) urls.unshift(this._images[i].url);
+      }
+    }
+
+    // Start preloading
+    this._preloadAbort = false;
+    urls.forEach(url => this._preloadOne(url));
+  },
+
+  /** Preload a single image (non-blocking) */
+  _preloadOne(url) {
+    const entry = this._getCachedImg(url);
+    if (entry.loaded || entry.loading) return;
+    entry.loading = true;
+    entry.img.onload = () => {
+      entry.loaded = true;
+      entry.loading = false;
+    };
+    entry.img.onerror = () => {
+      entry.loading = false;
+    };
+    entry.img.src = url;
+  },
+
   init() {
     // Button wiring
     document.getElementById('rbtn-back').onclick = () => this.close();
@@ -1015,6 +1133,8 @@ const Reader = {
     this._scale = 1.0;   // reset zoom on each open
     this._images = [];
     this._idx = 0;
+    // Clear cache for new album
+    this._imgCache.clear();
 
     this._showToolbar(true);
 
@@ -1078,7 +1198,7 @@ const Reader = {
     App.backToGallery();
   },
 
-  _renderPage() {
+  _renderPage(direction = 0) {
     // Clear canvas
     this.canvas.querySelectorAll('.page-img-wrap').forEach(el => el.remove());
     // Reset classes then apply current state
@@ -1110,10 +1230,8 @@ const Reader = {
     this._updatePageInfo();
     this._showToolbar(true);
 
-    // Preload neighbors
-    this._preload(this._idx - 1);
-    this._preload(this._idx + 1);
-    this._preload(this._idx + (this._double ? 2 : 1));
+    // Smart preload based on direction
+    this._smartPreload(direction);
   },
 
   _appendPageImg(idx) {
@@ -1122,12 +1240,47 @@ const Reader = {
     // viewMode class controls img sizing
     wrap.className = 'page-img-wrap ' + this._viewMode;
     wrap.dataset.idx = idx;
+
+    // Show loading indicator
+    const loadingIndicator = document.createElement('div');
+    loadingIndicator.className = 'spinner';
+    loadingIndicator.style.cssText = 'width:32px;height:32px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);opacity:0.7;';
+    wrap.appendChild(loadingIndicator);
+
     const img = document.createElement('img');
     img.alt = item.name;
     img.draggable = false;
+    img.style.opacity = '0';
+    img.style.transition = 'opacity 0.2s';
+
     // Apply rotation class if needed
     if (this._viewMode === 'rotate') img.classList.add('rotate');
-    img.src = item.url;
+
+    // Use cached image if available
+    const entry = this._getCachedImg(item.url);
+
+    const showImg = () => {
+      loadingIndicator.style.display = 'none';
+      img.style.opacity = '1';
+    };
+
+    if (entry.loaded) {
+      // Already cached - use immediately
+      img.src = item.url;
+      showImg();
+    } else {
+      // Load with indicator
+      img.onload = showImg;
+      img.onerror = () => {
+        loadingIndicator.innerHTML = '⚠️';
+        loadingIndicator.className = '';
+        loadingIndicator.style.cssText = 'font-size:24px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);';
+      };
+      // Trigger load via cache system
+      this._loadImg(item.url).then(showImg).catch(() => {});
+      img.src = item.url;
+    }
+
     wrap.appendChild(img);
     this.canvas.appendChild(wrap);
   },
@@ -1152,12 +1305,6 @@ const Reader = {
     this.canvas.style.setProperty('--canvas-h', h + 'px');
   },
 
-  _preload(idx) {
-    if (idx < 0 || idx >= this._images.length) return;
-    const img = new Image();
-    img.src = this._images[idx].url;
-  },
-
   _updatePageInfo() {
     const total = this._images.length;
     const cur = this._idx + 1;
@@ -1173,28 +1320,28 @@ const Reader = {
     const newIdx = this._idx + (this._rtl ? -delta : delta) * step;
     if (newIdx < 0 || newIdx >= this._images.length) return;
     this._idx = newIdx;
-    this._renderPage();
+    this._renderPage(delta);  // pass direction for smart preload
   },
 
-  gotoFirst() { this._idx = 0; this._renderPage(); },
+  gotoFirst() { this._idx = 0; this._renderPage(1); },
   gotoLast() {
     const step = this._double ? 2 : 1;
     this._idx = Math.max(0, this._images.length - step);
-    this._renderPage();
+    this._renderPage(-1);
   },
 
   toggleDouble() {
     this._double = !this._double;
     Settings.set('doublePages', this._double);
     this._syncButtons();
-    this._renderPage();
+    this._renderPage(0);
   },
 
   toggleRtl() {
     this._rtl = !this._rtl;
     Settings.set('rtl', this._rtl);
     this._syncButtons();
-    this._renderPage();
+    this._renderPage(0);
   },
 
   cycleViewMode() {
@@ -1205,7 +1352,7 @@ const Reader = {
     if (next === 'orig') this._scale = 1.0;
     Settings.set('viewMode', next);
     this._syncButtons();
-    this._renderPage();
+    this._renderPage(0);
   },
 
   toggleRotate() {
@@ -1213,7 +1360,7 @@ const Reader = {
     this._viewMode = newMode;
     Settings.set('viewMode', newMode);
     this._syncButtons();
-    this._renderPage();
+    this._renderPage(0);
   },
 
   toggleFullscreen() {
