@@ -1339,17 +1339,33 @@ const Reader = {
   /** Go to previous/next gallery in parent directory */
   async goToSibling(delta) {
     // delta: -1 = previous, 1 = next
+    if (!this._path) {
+      showOsd('无法切换：路径未知', 2000);
+      return;
+    }
+
     const parentPath = App._prevPath || App._parentOf(this._path);
-    const currentName = App._fromName || this._path.split('/').pop();
+    const currentName = App._fromName || (this._path.replace(/\/$/, '').split('/').pop() || '');
+
+    if (!parentPath) {
+      showOsd('无法切换：无法确定父目录', 2000);
+      return;
+    }
 
     // Fetch all items in parent directory
     try {
       const items = await fetchAllGalleryItems(parentPath);
-      if (!items.length) return;
+      if (!items.length) {
+        showOsd('父目录为空', 2000);
+        return;
+      }
 
       // Find current item index
       const idx = items.findIndex(it => it.name === currentName);
-      if (idx === -1) return;
+      if (idx === -1) {
+        showOsd('未找到当前项', 2000);
+        return;
+      }
 
       // Calculate sibling index
       const siblingIdx = idx + delta;
