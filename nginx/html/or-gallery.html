@@ -489,8 +489,8 @@ async function fetchAllGalleryItems(path) {
       if (data.page * data.page_size >= data.total || data.items.length === 0) break;
       page++;
     }
-    // Sort by name (natural sort)
-    const result = all.sort((a, b) => naturalSort(a.name, b.name));
+    // Sort by name (natural sort) - use naturalCmp for comparison
+    const result = all.sort((a, b) => naturalCmp(a.name, b.name));
     console.log('[fetchAllGalleryItems] returning', result.length, 'items');
     return result;
   } catch (err) {
