@@ -27,12 +27,19 @@ local _M = {}
 local mime_map = {
     jpeg = "image/jpeg",
     jpg  = "image/jpeg",
+    jfif = "image/jpeg",
+    jpe  = "image/jpeg",
     png  = "image/png",
     webp = "image/webp",
     avif = "image/avif",
     gif  = "image/gif",
     tiff = "image/tiff",
     tif  = "image/tiff",
+    bmp  = "image/bmp",
+    heic = "image/heic",
+    heif = "image/heif",
+    ico  = "image/x-icon",
+    svg  = "image/svg+xml",
 }
 
 local function ext_of(path)
