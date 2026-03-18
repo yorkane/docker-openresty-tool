@@ -15,8 +15,90 @@
 --   q      - quality 1-100 (jpeg/webp/avif, default 82)
 --
 -- Source root: $webdav_root (same as WebDAV)
+--
+-- Disk cache:
+--   Processed images are cached to OR_IMG_CACHE_PATH (default /usr/local/openresty/nginx/cache)
+--   Cache TTL is OR_IMG_CACHE_TTL seconds (default 172800 = 2d)
+--   Only requests with processing params (w/h/fit/fmt/q/crop) are cached.
+--   X-Cache-Status: HIT | MISS | BYPASS is set on every response.
 
 local _M = {}
+
+-- ── Cache helpers ─────────────────────────────────────────────────────────────
+
+local function cache_dir()
+    local env = require('env')
+    return (env.NGX_IMG_CACHE_PATH or "/usr/local/openresty/nginx/cache") .. "/img"
+end
+
+-- Parse TTL string like "2d", "12h", "3600" into seconds
+local function parse_ttl(s)
+    if not s then return 172800 end  -- default 2d
+    s = tostring(s)
+    local n, unit = s:match("^(%d+)([dhms]?)$")
+    n = tonumber(n)
+    if not n then return 172800 end
+    if unit == "d" then return n * 86400
+    elseif unit == "h" then return n * 3600
+    elseif unit == "m" then return n * 60
+    else return n end
+end
+
+local function cache_ttl()
+    local env = require('env')
+    return parse_ttl(env.NGX_IMG_CACHE_TTL)
+end
+
+-- Stable cache key: md5 of (uri + sorted args)
+local function make_cache_key(uri, args)
+    -- Build a canonical sorted query string
+    local parts = {}
+    for k, v in pairs(args) do
+        table.insert(parts, k .. "=" .. tostring(v))
+    end
+    table.sort(parts)
+    local canonical = uri .. "?" .. table.concat(parts, "&")
+    -- Use ngx.md5 for a short, safe filename
+    return ngx.md5(canonical)
+end
+
+-- Ensure directory exists (mkdir -p equivalent)
+local function mkdir_p(path)
+    os.execute("mkdir -p " .. path)
+end
+
+-- Read file bytes, returns nil on error
+local function read_file(path)
+    local fh = io.open(path, "rb")
+    if not fh then return nil end
+    local data = fh:read("*a")
+    fh:close()
+    return data
+end
+
+-- Write bytes to file (atomic: write to tmp then rename)
+local function write_file(path, data)
+    local tmp = path .. ".tmp"
+    local fh = io.open(tmp, "wb")
+    if not fh then return false end
+    fh:write(data)
+    fh:close()
+    return os.rename(tmp, path)
+end
+
+-- Get file mtime (seconds since epoch), returns nil if not exist
+local function file_mtime(path)
+    -- Try lfs_ffi (available in this OpenResty build)
+    local ok, lfs = pcall(require, "lfs_ffi")
+    if ok and lfs then
+        local mtime, err = lfs.attributes(path, "modification")
+        if mtime then return mtime end
+    end
+    -- Final fallback: just check existence (no TTL-based expiry)
+    local fh = io.open(path, "rb")
+    if fh then fh:close(); return os.time() end
+    return nil
+end
 
 -- MIME type map
 local mime_map = {
@@ -102,17 +184,44 @@ function _M.handle(webdav_root)
     local fmt = args.fmt
     local crop_str = args.crop  -- "x,y,w,h"
 
-    -- Fast path: no processing needed, just serve the file
+    -- Fast path: no processing needed, just serve the file (no cache)
     if not w and not h and not fmt and not crop_str then
         local src_ext = ext_of(rel):lower()
         ngx.header["Content-Type"] = mime_map[src_ext] or "application/octet-stream"
         ngx.header["X-Vips"] = "passthrough"
+        ngx.header["X-Cache-Status"] = "BYPASS"
         local fh = io.open(src_path, "rb")
         local data = fh:read("*a")
         fh:close()
         ngx.print(data)
         return
     end
+
+    -- ── Disk cache lookup ────────────────────────────────────────────────────
+    -- Determine output extension for cache filename
+    local out_ext = fmt and fmt:lower() or ext_of(rel):lower()
+    if out_ext == "jpeg" then out_ext = "jpg" end
+    local cache_key = make_cache_key(uri, args)
+    local cdir = cache_dir()
+    local cache_path = cdir .. "/" .. cache_key .. "." .. out_ext
+
+    local ttl = cache_ttl()
+    local mtime = file_mtime(cache_path)
+    if mtime and (os.time() - mtime) < ttl then
+        -- Cache HIT: serve from disk
+        local cached = read_file(cache_path)
+        if cached then
+            local ct = mime_map[out_ext] or "application/octet-stream"
+            ngx.header["Content-Type"]   = ct
+            ngx.header["Content-Length"] = #cached
+            ngx.header["X-Vips"]         = "cache-hit"
+            ngx.header["X-Cache-Status"] = "HIT"
+            ngx.header["Cache-Control"]  = "public, max-age=86400"
+            ngx.print(cached)
+            return
+        end
+    end
+    -- Cache MISS — process and store below
 
     -- Load vips
     local ok, vips = pcall(require, "vips")
@@ -236,6 +345,11 @@ function _M.handle(webdav_root)
     ngx.header["X-Vips"]        = "processed"
     ngx.header["X-Vips-Size"]   = img:width() .. "x" .. img:height()
     ngx.header["Cache-Control"] = "public, max-age=86400"
+    ngx.header["X-Cache-Status"] = "MISS"
+
+    -- Write to disk cache (best-effort, don't fail on error)
+    mkdir_p(cdir)
+    write_file(cache_path, buf)
 
     ngx.print(buf)
 end
