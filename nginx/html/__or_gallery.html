@@ -519,8 +519,17 @@ Settings.load();
 ═══════════════════════════════════════════════════ */
 const Router = {
   getPath() {
-    const p = new URLSearchParams(location.search).get('path') || '/';
-    return p;
+    // CRITICAL: Use location.href to get the full URL including fragment.
+    // Browser decodes %23 to # and treats #... as fragment, which is NOT
+    // included in location.search. We need to manually extract the path
+    // from the full URL to preserve # characters in directory names.
+    const fullUrl = location.href;
+    const match = fullUrl.match(/[?&]path=([^&]*)/);
+    if (match) {
+      // decodeURIComponent will decode %2F to /, %23 to #, etc.
+      return decodeURIComponent(match[1]);
+    }
+    return '/';
   },
   push(path) {
     const url = location.pathname + '?path=' + encodeURIComponent(path);
