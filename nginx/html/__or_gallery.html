@@ -695,6 +695,15 @@ const GalleryView = {
     this._delMode = false;
     this._kbIdx = -1;
     this._focusName = focusName;   // card name to auto-focus after load
+    this._restoreScrollTop = null; // reset before loading
+
+    // Get saved scroll position for this path (if any)
+    // This is used as fallback if _focusName is not found
+    const savedScrollTop = this._getScrollPos(path);
+    if (savedScrollTop) {
+      this._restoreScrollTop = savedScrollTop;
+    }
+
     this.grid.innerHTML = '';
     this.el.scrollTop = 0;
 
@@ -755,30 +764,24 @@ const GalleryView = {
       }
 
       // ── Restore focus or scroll position ───────────────────────────────
-      // Check if we have a focusName to restore (keep checking until found)
+      // Priority: _focusName > _restoreScrollTop
       if (this._focusName) {
         const cards = this._cards();
         const idx = cards.findIndex(c => c.dataset.name === this._focusName);
         if (idx >= 0) {
-          // Found! Scroll to the card
+          // Found! Scroll to the card and clear saved scroll position
           requestAnimationFrame(() => this._setFocus(idx, true));
           this._focusName = null;
+          this._restoreScrollTop = null; // focusName takes priority
         } else if (this._page * 50 >= this._total) {
-          // Reached end without finding, give up
+          // Reached end without finding, give up focusName but keep scrollPos
           this._focusName = null;
         }
         // else: not found yet, continue loading more pages
       }
-      // Check if we have a saved scroll position to restore
-      else if (this._page === 1) {
-        const savedScrollTop = this._getScrollPos(this._path);
-        if (savedScrollTop) {
-          this._restoreScrollTop = savedScrollTop;
-        }
-      }
 
-      // Check if we need to restore scroll position
-      if (this._restoreScrollTop) {
+      // Restore scroll position if needed (after focusName is resolved or not set)
+      if (this._restoreScrollTop && !this._focusName) {
         const contentHeight = this.grid.scrollHeight;
         const viewportHeight = this.el.clientHeight;
         // If we have enough content to scroll, or we've loaded all items
