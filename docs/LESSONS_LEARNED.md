@@ -223,7 +223,7 @@ proxy_pass http://127.0.0.1:81;
 
 **错误信息:**
 ```
-访问 /__or_gallery?path=/aria2_2/======/#SayoMomo/... 异常
+访问 /or-gallery?path=/aria2_2/======/#SayoMomo/... 异常
 ```
 
 **原因分析:**

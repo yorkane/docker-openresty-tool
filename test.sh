@@ -319,7 +319,7 @@ test_bug_regression() {
     
     # 测试 Gallery encodeFilePath 使用
     print_test "回归测试: Gallery API 调用使用 encodeFilePath"
-    if grep -q "encodeFilePath.*path" "$PROJECT_DIR/nginx/html/__or_gallery.html"; then
+    if grep -q "encodeFilePath.*path" "$PROJECT_DIR/nginx/html/or-gallery.html"; then
         pass "Gallery API 调用正确编码 path 参数"
     else
         fail "Gallery API 调用未编码 path，# 等特殊字符会出问题"

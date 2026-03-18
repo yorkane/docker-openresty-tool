@@ -474,20 +474,29 @@ async function apiRm(path) {
  * @param {string} path
  */
 async function fetchAllGalleryItems(path) {
+  console.log('[fetchAllGalleryItems] called with path:', path);
   const PAGE = 100;
   let page = 1, all = [];
-  while (true) {
-    const data = await apiLs(path, { page, page_size: PAGE });
-    for (const it of data.items) {
-      if (isDir(it.type) || isZip(it.type)) {
-        all.push(it);
+  try {
+    while (true) {
+      const data = await apiLs(path, { page, page_size: PAGE });
+      console.log('[fetchAllGalleryItems] page', page, 'items:', data.items.length, 'total:', data.total);
+      for (const it of data.items) {
+        if (isDir(it.type) || isZip(it.type)) {
+          all.push(it);
+        }
       }
+      if (data.page * data.page_size >= data.total || data.items.length === 0) break;
+      page++;
     }
-    if (data.page * data.page_size >= data.total || data.items.length === 0) break;
-    page++;
+    // Sort by name (natural sort)
+    const result = all.sort((a, b) => naturalSort(a.name, b.name));
+    console.log('[fetchAllGalleryItems] returning', result.length, 'items');
+    return result;
+  } catch (err) {
+    console.error('[fetchAllGalleryItems] error:', err);
+    throw err;
   }
-  // Sort by name (natural sort)
-  return all.sort((a, b) => naturalSort(a.name, b.name));
 }
 
 /**
@@ -570,10 +579,10 @@ const Settings = {
   defaults: { doublePages: false, rtl: false, viewMode: 'fit' },
   _data: null,
   load() {
-    try { this._data = { ...this.defaults, ...JSON.parse(localStorage.getItem('__or_gallery') || '{}') }; }
+    try { this._data = { ...this.defaults, ...JSON.parse(localStorage.getItem('or-gallery') || '{}') }; }
     catch { this._data = { ...this.defaults }; }
   },
-  save() { localStorage.setItem('__or_gallery', JSON.stringify(this._data)); },
+  save() { localStorage.setItem('or-gallery', JSON.stringify(this._data)); },
   get(k) { return this._data[k]; },
   set(k, v) { this._data[k] = v; this.save(); },
 };
@@ -583,37 +592,79 @@ Settings.load();
    ROUTER
 ═══════════════════════════════════════════════════ */
 const Router = {
-  getPath() {
+  /**
+   * Parse URL parameters from location.href
+   * Supports: path, page, reader
+   * Example: /or-gallery?path=/my/dir&page=2&reader=/my/dir/gallery.zip
+   */
+  getParams() {
     // CRITICAL: Use location.href to get the full URL including fragment.
     // Browser decodes %23 to # and treats #... as fragment, which is NOT
-    // included in location.search. We need to manually extract the path
+    // included in location.search. We need to manually extract params
     // from the full URL to preserve # characters in directory names.
     const fullUrl = location.href;
-    const match = fullUrl.match(/[?&]path=([^&]*)/);
-    if (match) {
-      // decodeURIComponent will decode %2F to /, %23 to #, etc.
-      return decodeURIComponent(match[1]);
+    const params = { path: '/', page: 1, reader: null };
+
+    // Extract path
+    const pathMatch = fullUrl.match(/[?&]path=([^&]*)/);
+    if (pathMatch) {
+      params.path = decodeURIComponent(pathMatch[1]);
     }
-    return '/';
+
+    // Extract page (gallery page number)
+    const pageMatch = fullUrl.match(/[?&]page=(\d+)/);
+    if (pageMatch) {
+      params.page = parseInt(pageMatch[1], 10) || 1;
+    }
+
+    // Extract reader (path to open directly in reader)
+    const readerMatch = fullUrl.match(/[?&]reader=([^&]*)/);
+    if (readerMatch) {
+      params.reader = decodeURIComponent(readerMatch[1]);
+    }
+
+    return params;
   },
-  push(path) {
-    const url = location.pathname + '?path=' + encodeURIComponent(path);
-    history.pushState({ path }, '', url);
-    App.navigate(path);
+
+  getPath() {
+    return this.getParams().path;
   },
+
+  push(path, opts = {}) {
+    // opts: { page, reader }
+    let url = location.pathname + '?path=' + encodeURIComponent(path);
+    if (opts.page && opts.page > 1) url += '&page=' + opts.page;
+    if (opts.reader) url += '&reader=' + encodeURIComponent(opts.reader);
+    history.pushState({ path, ...opts }, '', url);
+    App.navigate(path, false, opts);
+  },
+
   /** Push with a focusName hint — Gallery will restore focus to that card */
   pushWithFocus(path, focusName) {
     const url = location.pathname + '?path=' + encodeURIComponent(path);
     history.pushState({ path }, '', url);
     App.navigateToGallery(path, focusName);
   },
-  replace(path) {
-    const url = location.pathname + '?path=' + encodeURIComponent(path);
-    history.replaceState({ path }, '', url);
+
+  replace(path, opts = {}) {
+    let url = location.pathname + '?path=' + encodeURIComponent(path);
+    if (opts.page && opts.page > 1) url += '&page=' + opts.page;
+    if (opts.reader) url += '&reader=' + encodeURIComponent(opts.reader);
+    history.replaceState({ path, ...opts }, '', url);
+  },
+
+  /** Update current URL with page number (for gallery pagination) */
+  updatePage(page) {
+    const params = this.getParams();
+    let url = location.pathname + '?path=' + encodeURIComponent(params.path);
+    if (page > 1) url += '&page=' + page;
+    history.replaceState({ path: params.path, page }, '', url);
   },
 };
 window.addEventListener('popstate', e => {
-  App.navigate(e.state?.path || Router.getPath(), true);
+  // Get params from URL (not from state, as state may be stale)
+  const params = Router.getParams();
+  App.navigate(params.path, true, { page: params.page, reader: params.reader });
 });
 
 /* ═══════════════════════════════════════════════════
@@ -759,7 +810,7 @@ const GalleryView = {
     card.querySelector('.del-btn')?.click();
   },
 
-  async show(path, focusName = null) {
+  async show(path, focusName = null, initialPage = null) {
     // Save page number for previous path before switching
     if (this._path && this._path !== path) {
       this._savePageNum(this._path, this._page);
@@ -773,9 +824,13 @@ const GalleryView = {
     this._kbIdx = -1;
     this._focusName = focusName;
 
-    // Get saved page number for this path
-    const savedPage = this._getPageNum(path);
-    this._page = savedPage || 1;
+    // Priority: URL param > saved page > 1
+    if (initialPage !== null && initialPage > 0) {
+      this._page = initialPage;
+    } else {
+      const savedPage = this._getPageNum(path);
+      this._page = savedPage || 1;
+    }
 
     this.grid.innerHTML = '';
     this.el.scrollTop = 0;
@@ -789,6 +844,9 @@ const GalleryView = {
     document.getElementById('reader-view').classList.remove('active');
     document.getElementById('status-msg').classList.remove('show');
     document.getElementById('toolbar').style.display = '';
+
+    // Update URL with current page
+    Router.updatePage(this._page);
 
     await this.loadPage();
   },
@@ -820,6 +878,13 @@ const GalleryView = {
     this.el.scrollTop = 0;
     this._kbIdx = -1;
     this._focusName = null;
+
+    // Update URL with new page
+    Router.updatePage(this._page);
+
+    // Save page number for this path
+    this._savePageNum(this._path, this._page);
+
     this.loadPage();
   },
 
@@ -1339,22 +1404,29 @@ const Reader = {
   /** Go to previous/next gallery in parent directory */
   async goToSibling(delta) {
     // delta: -1 = previous, 1 = next
+    console.log('[goToSibling] called, delta:', delta, '_path:', this._path, '_prevPath:', App._prevPath, '_fromName:', App._fromName);
+    
     if (!this._path) {
+      console.error('[goToSibling] _path is null/undefined');
       showOsd('无法切换：路径未知', 2000);
       return;
     }
 
     const parentPath = App._prevPath || App._parentOf(this._path);
     const currentName = App._fromName || (this._path.replace(/\/$/, '').split('/').pop() || '');
+    console.log('[goToSibling] parentPath:', parentPath, 'currentName:', currentName);
 
     if (!parentPath) {
+      console.error('[goToSibling] parentPath is null/undefined');
       showOsd('无法切换：无法确定父目录', 2000);
       return;
     }
 
     // Fetch all items in parent directory
     try {
+      console.log('[goToSibling] fetching items from:', parentPath);
       const items = await fetchAllGalleryItems(parentPath);
+      console.log('[goToSibling] fetched items count:', items.length);
       if (!items.length) {
         showOsd('父目录为空', 2000);
         return;
@@ -1362,6 +1434,7 @@ const Reader = {
 
       // Find current item index
       const idx = items.findIndex(it => it.name === currentName);
+      console.log('[goToSibling] current item index:', idx, 'item names:', items.map(it => it.name).slice(0, 5));
       if (idx === -1) {
         showOsd('未找到当前项', 2000);
         return;
@@ -1377,6 +1450,7 @@ const Reader = {
       // Navigate to sibling
       const sibling = items[siblingIdx];
       const siblingPath = joinPath(parentPath, sibling.name);
+      console.log('[goToSibling] navigating to sibling:', sibling.name, 'path:', siblingPath);
 
       // Save focus info for return
       App._prevPath = parentPath;
@@ -1385,8 +1459,10 @@ const Reader = {
       // Open sibling gallery
       const isZipItem = isZip(sibling.type);
       await this.open(siblingPath, isZipItem);
+      console.log('[goToSibling] opened successfully');
 
     } catch (err) {
+      console.error('[goToSibling] error:', err);
       showOsd('切换失败: ' + err.message, 2000);
     }
   },
@@ -1711,9 +1787,11 @@ document.addEventListener('keydown', e => {
         Reader.deleteCurrentPage();
         break;
       case '[':
+        console.log('[keydown] [ pressed, calling goToPrevGallery');
         Reader.goToPrevGallery();
         break;
       case ']':
+        console.log('[keydown] ] pressed, calling goToNextGallery');
         Reader.goToNextGallery();
         break;
     }
@@ -1776,7 +1854,28 @@ const App = {
   _prevPath: null,
   _fromName: null,   // name of the card we entered (to restore focus on back)
 
-  async navigate(path, isPopState = false) {
+  /**
+   * Navigate to a path with optional URL parameters.
+   * @param {string} path - Directory or zip path
+   * @param {boolean} isPopState - True if triggered by browser back/forward
+   * @param {object} opts - URL parameters: { page, reader }
+   */
+  async navigate(path, isPopState = false, opts = {}) {
+    // If reader parameter is specified, open reader directly
+    if (opts.reader) {
+      const readerPath = opts.reader;
+      const lastSeg = readerPath.replace(/\/+$/, '').split('/').pop() || '';
+      const isZipPath = ZIP_EXTS.has(extOf(lastSeg));
+
+      if (!isPopState) {
+        const parts = readerPath.replace(/\/$/, '').split('/');
+        this._prevPath = parts.slice(0, -1).join('/') || '/';
+        this._fromName = parts[parts.length - 1] || null;
+      }
+      Reader.open(readerPath, isZipPath);
+      return;
+    }
+
     // Determine if this path should open reader or gallery.
     // A path IS a zip if its LAST path segment ends with a zip extension.
     // Use extOf() on the last segment to avoid false-positives from parent dir names.
@@ -1815,10 +1914,10 @@ const App = {
         } else {
           // Show as gallery (may also contain images which will be ignored at gallery level)
           if (!isPopState) { this._prevPath = null; this._fromName = null; }
-          GalleryView.show(path);
+          GalleryView.show(path, null, opts.page);
         }
       } catch (err) {
-        GalleryView.show(path);
+        GalleryView.show(path, null, opts.page);
       }
     }
   },
@@ -1848,7 +1947,9 @@ const App = {
 ═══════════════════════════════════════════════════ */
 GalleryView.init();
 Reader.init();
-App.navigate(Router.getPath(), true);
+// Parse URL params and navigate
+const params = Router.getParams();
+App.navigate(params.path, true, { page: params.page, reader: params.reader });
 </script>
 </body>
 </html>
