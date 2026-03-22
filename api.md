@@ -11,6 +11,7 @@
 > | [移动/改名](#移动--改名--post-apimove) | `POST` | `/api/move` | 移动或重命名文件/目录 |
 > | [新建目录](#新建目录--post-apimkdirpath) | `POST` | `/api/mkdir/<path>` | 创建目录（mkdir -p） |
 > | [上传文件](#上传文件--post-apiuploadpath) | `POST` | `/api/upload/<path>` | 上传单个文件 |
+> | [实时图片处理](#实时图片处理--post-apiimg) | `POST` | `/api/img` | 二进制图片处理（缩放/裁切/转格式），高吞吐实时服务 |
 
 ---
 
@@ -522,6 +523,124 @@ curl -X POST http://localhost:5080/api/upload/archives/2026/march/report.pdf \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `OR_FILEAPI_DISABLE` | _(未设置)_ | 设为 `"true"` 时禁用所有文件管理端点，统一返回 403 |
+
+---
+
+## 实时图片处理 — `POST /api/img`
+
+将图片二进制直接 POST 到此接口，服务端完成缩放、裁切、格式转换后立即返回处理结果。  
+**参数与 `/img/` 完全一致**，但不使用 nginx proxy_cache，专为需要最高吞吐量的实时处理场景设计。
+
+```
+POST /api/img?w=200&h=150&fit=cover&fmt=webp&q=80
+Content-Type: image/jpeg   (或任何图片 MIME 类型)
+Body: <raw image bytes>
+```
+
+### 与 `/img/` 的对比
+
+| 特性 | `/img/<path>` | `/api/img` |
+|------|--------------|------------|
+| 图片来源 | 服务器本地文件 | 请求 body（内存直接处理） |
+| Nginx 缓存 | ✅ proxy_cache | ❌ 无缓存（每次都处理） |
+| 适用场景 | 静态资源加速 | 实时处理流水线、高并发转换服务 |
+| 磁盘 I/O | 读取磁盘文件 | 纯内存操作 |
+| CPU 使用 | 缓存命中时为零 | 每请求全速处理，饱和所有核心 |
+
+### 查询参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `w` | int | — | 目标宽度（像素），不填则不限制 |
+| `h` | int | — | 目标高度（像素），不填则不限制 |
+| `fit` | string | `contain` | 缩放模式：`contain` \| `cover` \| `fill` \| `scale` |
+| `crop` | string | — | 先裁切再缩放，格式：`x,y,width,height`（像素坐标） |
+| `fmt` | string | 同输入格式 | 输出格式：`jpeg` \| `webp` \| `png` \| `avif` \| `gif` |
+| `q` | int 1-100 | `82` | 输出质量（jpeg / webp / avif 有效） |
+
+#### `fit` 模式说明
+
+| 值 | 行为 |
+|----|------|
+| `contain`（默认）| 等比缩放，完整放入目标框，不裁切 |
+| `cover` | 等比缩放，覆盖整个目标框，居中裁切多余部分 |
+| `fill` | 不保持比例，强制拉伸填满目标尺寸 |
+| `scale` | 按 `w` 等比缩放（仅支持 `w` 参数） |
+
+### 请求
+
+- **Method**: `POST`
+- **Content-Type**: `image/jpeg`、`image/webp`、`image/png`、`image/avif` 等（任意 libvips 支持的格式）
+- **Body**: 原始图片二进制字节（无需 multipart/form-data 封装）
+
+### 响应
+
+#### 成功 `200 OK`
+
+- **Body**: 处理后的图片二进制
+- **Content-Type**: 对应输出格式的 MIME 类型
+- **响应头**:
+
+| 头 | 说明 |
+|----|------|
+| `X-Vips` | `processed`（处理完成）或 `passthrough`（无参数直通） |
+| `X-Vips-Size` | 处理后尺寸，如 `200x150` |
+| `Content-Length` | 输出字节数 |
+
+#### 错误响应
+
+所有错误均返回 `application/json`：
+
+| HTTP 状态 | error 代码 | 触发条件 |
+|-----------|-----------|----------|
+| `400` | `bad_request` | 请求 body 为空 |
+| `405` | `method_not_allowed` | 使用了非 POST 方法 |
+| `415` | `unsupported_media_type` | 图片格式无法解码（损坏或不支持的格式） |
+| `503` | `service_unavailable` | lua-vips 未安装 |
+| `500` | `internal` | 图片编码失败 |
+
+### 示例
+
+```bash
+# 缩放为 400px 宽，保持比例，转为 webp
+curl -X POST "http://localhost:5080/api/img?w=400&fmt=webp&q=85" \
+     -H "Content-Type: image/jpeg" \
+     --data-binary @photo.jpg \
+     -o thumb.webp
+
+# cover 模式裁切为 200×200 缩略图
+curl -X POST "http://localhost:5080/api/img?w=200&h=200&fit=cover&fmt=jpeg&q=80" \
+     -H "Content-Type: image/png" \
+     --data-binary @avatar.png \
+     -o avatar_thumb.jpg
+
+# 先裁切区域再缩放
+curl -X POST "http://localhost:5080/api/img?crop=100,50,800,600&w=400&fmt=webp" \
+     -H "Content-Type: image/jpeg" \
+     --data-binary @screenshot.jpg \
+     -o cropped.webp
+
+# 仅转换格式（无缩放）
+curl -X POST "http://localhost:5080/api/img?fmt=avif&q=70" \
+     -H "Content-Type: image/jpeg" \
+     --data-binary @photo.jpg \
+     -o photo.avif
+
+# 无参数直通（返回原图，不处理）
+curl -X POST "http://localhost:5080/api/img" \
+     -H "Content-Type: image/jpeg" \
+     --data-binary @photo.jpg \
+     -o original_copy.jpg
+```
+
+### 高并发使用建议
+
+- **CPU 并发**：服务自动启用 libvips 内部线程池（`VIPS_CONCURRENCY=0`），每个请求可饱和所有 CPU 核心。
+  若需限制 vips 线程数，设置环境变量 `VIPS_CONCURRENCY=N`（如 `4`）。
+- **连接池**：建议客户端使用 HTTP keep-alive + 连接池，减少 TCP 握手开销。
+- **body 缓冲**：nginx 配置 `client_body_buffer_size 4m`，4 MB 以内的图片全程内存处理；超过则自动落盘临时文件，Lua 侧透明处理。
+- **无缓存**：本接口不缓存，适合每次输入都不同的场景（如用户上传图片处理、动态水印等）。  
+  如需缓存处理结果，请使用 `/img/<path>` 接口（nginx proxy_cache）。
 
 ---
 
