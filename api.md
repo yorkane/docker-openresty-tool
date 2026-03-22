@@ -12,6 +12,7 @@
 > | [新建目录](#新建目录--post-apimkdirpath) | `POST` | `/api/mkdir/<path>` | 创建目录（mkdir -p） |
 > | [上传文件](#上传文件--post-apiuploadpath) | `POST` | `/api/upload/<path>` | 上传单个文件 |
 > | [实时图片处理](#实时图片处理--post-apiimg) | `POST` | `/api/img` | 二进制图片处理（缩放/裁切/转格式），高吞吐实时服务 |
+> | [批量图片处理](#批量图片处理--post-apibatch-img) | `POST` | `/api/batch-img` | 本地文件/目录批量处理，支持本地 vips 和远程算力两种模式 |
 
 ---
 
@@ -638,9 +639,201 @@ curl -X POST "http://localhost:5080/api/img" \
 - **CPU 并发**：服务自动启用 libvips 内部线程池（`VIPS_CONCURRENCY=0`），每个请求可饱和所有 CPU 核心。
   若需限制 vips 线程数，设置环境变量 `VIPS_CONCURRENCY=N`（如 `4`）。
 - **连接池**：建议客户端使用 HTTP keep-alive + 连接池，减少 TCP 握手开销。
-- **body 缓冲**：nginx 配置 `client_body_buffer_size 4m`，4 MB 以内的图片全程内存处理；超过则自动落盘临时文件，Lua 侧透明处理。
+- **body 缓冲**：nginx 配置 `client_body_buffer_size 32m`，32 MB 以内的图片全程内存处理；超过则自动落盘临时文件，Lua 侧透明处理。
 - **无缓存**：本接口不缓存，适合每次输入都不同的场景（如用户上传图片处理、动态水印等）。  
   如需缓存处理结果，请使用 `/img/<path>` 接口（nginx proxy_cache）。
+
+---
+
+## 批量图片处理 — `POST /api/batch-img`
+
+对服务器本地文件或目录中的图片进行批量处理（缩放、裁切、格式转换）。  
+支持两种处理模式：**本地模式**（使用 libvips 在当前实例处理）和**远程模式**（将图片转发给另一台高算力实例的 `/api/img` 接口处理）。
+
+```
+POST /api/batch-img
+Content-Type: application/json
+```
+
+### 请求 Body（JSON）
+
+#### 必填字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `path` | string | 本地文件或目录路径（相对于 webdav_root，或绝对路径） |
+
+#### 图片处理参数（与 `/api/img` 完全一致）
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `w` | int | — | 目标宽度（像素） |
+| `h` | int | — | 目标高度（像素） |
+| `fit` | string | `contain` | 缩放模式：`contain` \| `cover` \| `fill` \| `scale` |
+| `crop` | string | — | 先裁切再缩放，格式：`"x,y,width,height"` |
+| `fmt` | string | 同输入格式 | 输出格式：`jpeg` \| `webp` \| `png` \| `avif` \| `gif` |
+| `q` | int 1-100 | `82` | 输出质量（jpeg/webp/avif 有效） |
+
+#### 输出控制
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `out_suffix` | string | — | 在文件名后、扩展名前插入后缀，例如 `"-thumb"` → `photo.jpg → photo-thumb.jpg` |
+| `out_dir` | string | — | 将输出写到此目录（保留文件名）；目录不存在时自动创建 |
+| `overwrite` | bool | `true` | 输出文件已存在时是否覆盖；`false` 时跳过，计入 `skipped` |
+| `recursive` | bool | `false` | 是否递归处理子目录 |
+
+> `out_suffix` 和 `out_dir` 均不指定时，原地覆盖源文件（配合 `fmt` 可同时转换格式并重命名扩展名）。
+
+#### 处理模式
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `mode` | string | `"local"` | `"local"` — libvips 本地处理；`"remote"` — 转发给远端 `/api/img` |
+
+#### 远程模式参数（`mode=remote` 时生效）
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `remote_url` | string | **必填** | 远端 `/api/img` 完整 URL，如 `http://10.0.0.5:5080/api/img` |
+| `concurrency` | int 1-64 | `4` | 同时向远端发送的并发请求数；建议设为远端 CPU 核心数 |
+| `connect_timeout_ms` | int | `5000` | TCP 连接超时（毫秒） |
+| `send_timeout_ms` | int | `30000` | 发送图片数据超时（毫秒） |
+| `recv_timeout_ms` | int | `60000` | 接收处理结果超时（毫秒） |
+
+### 成功响应 `200 OK`
+
+```json
+{
+  "ok":      true,
+  "total":   42,
+  "done":    41,
+  "skipped": 1,
+  "errors":  [],
+  "results": [
+    {
+      "src":      "/data/photos/a.jpg",
+      "dst":      "/data/thumbs/a.jpg",
+      "size_in":  2048000,
+      "size_out": 184320,
+      "ms":       38
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | bool | 所有文件均无错误时为 `true` |
+| `total` | int | 扫描到的图片文件总数 |
+| `done` | int | 成功处理的文件数 |
+| `skipped` | int | 因 `overwrite=false` 跳过的文件数 |
+| `errors` | array | 处理失败的条目，每项含 `src` 和 `error` 字段 |
+| `results` | array | 成功处理的详情，每项含 `src`、`dst`、`size_in`、`size_out`（字节）、`ms`（耗时毫秒） |
+
+### 错误响应
+
+| HTTP 状态 | error 代码 | 触发条件 |
+|-----------|-----------|----------|
+| `400` | `bad_request` | 缺少 `path`；路径包含 `..`；`mode=remote` 但未提供 `remote_url` 或 URL 格式错误 |
+| `405` | `method_not_allowed` | 非 POST 请求 |
+
+### 示例
+
+#### 本地模式：将目录下所有图片压缩为 webp 缩略图
+
+```bash
+# 目录 /data/photos 下的所有图片 → /data/thumbs/，转 webp，宽度 800px
+curl -X POST http://localhost:5080/api/batch-img \
+     -H "Content-Type: application/json" \
+     -d '{
+       "path":       "/data/photos",
+       "w":          800,
+       "fit":        "contain",
+       "fmt":        "webp",
+       "q":          82,
+       "out_dir":    "/data/thumbs",
+       "overwrite":  true,
+       "mode":       "local"
+     }'
+```
+
+#### 本地模式：原地转换格式（jpg → webp），文件名加 `-web` 后缀
+
+```bash
+curl -X POST http://localhost:5080/api/batch-img \
+     -H "Content-Type: application/json" \
+     -d '{
+       "path":       "/data/originals",
+       "fmt":        "webp",
+       "q":          85,
+       "out_suffix": "-web",
+       "mode":       "local"
+     }'
+# photo.jpg → photo-web.webp（保留原文件）
+```
+
+#### 本地模式：递归处理子目录，原地覆盖
+
+```bash
+curl -X POST http://localhost:5080/api/batch-img \
+     -H "Content-Type: application/json" \
+     -d '{
+       "path":      "/data/gallery",
+       "recursive": true,
+       "w":         1920,
+       "h":         1080,
+       "fit":       "contain",
+       "q":         88,
+       "overwrite": true,
+       "mode":      "local"
+     }'
+```
+
+#### 远程模式：将本地文件批量发送到高算力实例处理
+
+```bash
+# 本地实例 → 远端高算力实例 10.0.0.5:5080
+# 并发 16，最大化利用远端带宽和算力
+curl -X POST http://localhost:5080/api/batch-img \
+     -H "Content-Type: application/json" \
+     -d '{
+       "path":               "/data/raw",
+       "w":                  1200,
+       "fmt":                "webp",
+       "q":                  82,
+       "out_dir":            "/data/processed",
+       "mode":               "remote",
+       "remote_url":         "http://10.0.0.5:5080/api/img",
+       "concurrency":        16,
+       "connect_timeout_ms": 3000,
+       "send_timeout_ms":    60000,
+       "recv_timeout_ms":    120000
+     }'
+```
+
+### 并发与性能调优
+
+#### 本地模式
+- libvips 内部自动开启多线程处理单张图片，`VIPS_CONCURRENCY=0` 可饱和所有 CPU 核心。
+- 文件顺序处理；如需更高并发，可在多个 nginx worker 上同时发起多个 `/api/batch-img` 请求（传入不同子目录）。
+
+#### 远程模式
+- `concurrency` 控制同时飞行的请求数，**建议设置为远端机器 CPU 核心数**，例如 16 核机器设 16。
+- 过高的 `concurrency` 会造成远端内存压力（每个并发请求各自在内存中保留解码像素 + 输出 buffer）；建议从 8 开始测试。
+- 本地 → 远端的带宽是瓶颈时，可以在多台本地机器上同时运行，指向同一个远端实例。
+- `recv_timeout_ms` 需根据最大图片处理时间调整；处理 4K 图片转 avif 可能超过 30 秒。
+
+#### 本地 vs 远程对比
+
+| 特性 | `mode=local` | `mode=remote` |
+|------|-------------|---------------|
+| CPU 使用 | 当前实例 | 远端高算力实例 |
+| 网络 I/O | 无 | 双向（上传原图 + 下载结果） |
+| 磁盘写入 | 本地 | 本地（结果由本地写入） |
+| 适用场景 | 单机处理，I/O 带宽足够 | 本地算力弱，远端 GPU/高核数实例 |
+| 并发控制 | vips 线程池（自动） | `concurrency` 参数 |
+| 容错 | 单文件失败不中断整体 | 单文件失败记录 errors，继续处理 |
 
 ---
 
@@ -668,3 +861,13 @@ curl -X POST "http://localhost:5080/api/img" \
 - **文件上传**：支持 nginx 将大请求体 spool 到临时文件的场景（`ngx.req.get_body_file()`），流式复制，无内存峰值
 - **JSON 解析**：`parse_move_body()` 用正则从 JSON 字符串提取 `from`/`to`/`overwrite`，无需 `cjson` 依赖
 - **安全性**：所有路径均检测 `..`（400）并验证最终路径仍在 `webdav_root` 内（403）
+
+### 批量图片处理 API（`lib/batchapi.lua`）
+
+- **模块**：`nginx/lua/lib/batchapi.lua`，路由在 `nginx/conf/default_app/main.conf`
+- **双模式设计**：`mode=local` 直接调用 libvips（零网络开销）；`mode=remote` 通过 TCP HTTP/1.1 转发至远端 `/api/img`
+- **并发控制**：远端模式使用 `ngx.semaphore` 信号量精确控制飞行中的请求数，防止远端过载
+- **连接复用**：远端 socket 调用 `setkeepalive(10000, 64)` 归还连接池，降低 TCP 握手开销
+- **输出命名**：三种方式：原地覆盖、`out_suffix`（插入文件名后缀）、`out_dir`（写到新目录）
+- **文件扫描**：LuaJIT FFI `opendir/readdir`，可选递归子目录，支持过滤非图片文件
+- **安全性**：检测路径 `..`（400），`webdav_root` 相对路径自动补全
