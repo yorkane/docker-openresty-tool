@@ -462,8 +462,7 @@ local function process_local_one(src, dst, params, overwrite)
         end
     end
 
-    local save_sfx, out_ext = build_save_suffix(params.fmt, params.q, src_ext)
-    _ = out_ext  -- used by caller via dst_path
+    local save_sfx = build_save_suffix(params.fmt, params.q, src_ext)
 
     local ok6, buf = pcall(function() return img:write_to_buffer(save_sfx) end)
     if not ok6 or not buf then return false, "encode failed: " .. tostring(buf) end
@@ -770,17 +769,23 @@ function _M.handle(webdav_root)
         end
 
         for i = 1, #threads do
-            local ok2, res = ngx.thread.wait(threads[i])
-            if not ok2 then
-                errors[#errors+1] = { src=files[i], error=tostring(res) }
-            elseif res == false then
-                -- process_remote_one returned false, err
-                errors[#errors+1] = { src=files[i], error="processing failed" }
-            elseif type(res) == "string" and res == "exists" then
-                skipped = skipped + 1
-            elseif type(res) == "table" then
+            -- ngx.thread.wait returns: thread_ok, retval1, retval2, ...
+            -- task() returns: proc_ok, data_or_err
+            -- so we get: thread_ok, proc_ok, data_or_err
+            local thread_ok, proc_ok, data = ngx.thread.wait(threads[i])
+            if not thread_ok then
+                -- coroutine itself threw an unhandled error
+                errors[#errors+1] = { src=files[i], error=tostring(proc_ok) }
+            elseif not proc_ok then
+                -- process_remote_one returned false, data is the error string
+                if data == "exists" then
+                    skipped = skipped + 1
+                else
+                    errors[#errors+1] = { src=files[i], error=tostring(data) }
+                end
+            elseif type(data) == "table" then
                 done = done + 1
-                results[#results+1] = res
+                results[#results+1] = data
             end
         end
 
