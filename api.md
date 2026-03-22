@@ -643,6 +643,22 @@ curl -X POST "http://localhost:5080/api/img" \
 - **无缓存**：本接口不缓存，适合每次输入都不同的场景（如用户上传图片处理、动态水印等）。  
   如需缓存处理结果，请使用 `/img/<path>` 接口（nginx proxy_cache）。
 
+### 动态图保护（Animated WebP/GIF）
+
+- 接口会自动检测 **动态 WebP** 和 **动态 GIF**（通过文件头扫描）。
+- 检测到动态图时，直接返回原始字节（HTTP 200），响应头标记为 `X-Vips: passthrough-animated`。
+- 这避免了缩放/转码导致动画帧丢失的问题。
+- 如需强制处理（会丢失动画），使用 `ignore_exts` 参数排除该格式。
+
+### 扩展名过滤（`ignore_exts`）
+
+- 参数 `ignore_exts=gif,webp` 可指定跳过的格式。
+- 匹配的文件将原样返回（`/api/img`）或在批量任务中跳过（`/api/batch-img`）。
+- 适用于：
+  - 保留动态图完整性
+  - 避免对已经压缩良好的格式二次处理
+  - 减少处理耗时
+
 ---
 
 ## 批量图片处理 — `POST /api/batch-img`
@@ -673,6 +689,7 @@ Content-Type: application/json
 | `crop` | string | — | 先裁切再缩放，格式：`"x,y,width,height"` |
 | `fmt` | string | 同输入格式 | 输出格式：`jpeg` \| `webp` \| `png` \| `avif` \| `gif` |
 | `q` | int 1-100 | `82` | 输出质量（jpeg/webp/avif 有效） |
+| `ignore_exts` | string | — | 逗号分隔的扩展名列表，匹配的文件将原样复制/跳过（如 `"gif,webp"` 保留动态图） |
 
 #### 输出控制
 
