@@ -623,8 +623,27 @@ end
 function _M.handle(webdav_root)
     webdav_root = (webdav_root or "/webdav"):gsub("/+$", "")
 
+    ngx.log(ngx.ERR, "GALLERIZE: handle called, method=" .. ngx.req.get_method() .. ", uri=" .. ngx.var.uri)
+
+    -- Handle CORS preflight
+    local method = ngx.req.get_method()
+    if method == "OPTIONS" then
+        ngx.log(ngx.ERR, "GALLERIZE: handling OPTIONS request")
+        ngx.header['Access-Control-Allow-Origin'] = '*'
+        ngx.header['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        ngx.header['Access-Control-Allow-Headers'] = 'Authorization,Content-Type,DNT,User-Agent,X-Requested-With'
+        ngx.header['Access-Control-Max-Age'] = '1728000'
+        ngx.status = 200
+        return ngx.exit(200)
+    end
+
+    -- Set CORS headers for actual requests
+    ngx.header['Access-Control-Allow-Origin'] = '*'
+    ngx.header['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    ngx.header['Access-Control-Allow-Headers'] = 'Authorization,Content-Type,DNT,User-Agent,X-Requested-With'
+
     -- Only POST allowed
-    if ngx.req.get_method() ~= "POST" then
+    if method ~= "POST" then
         return send_json(405, err_response("method_not_allowed", "use POST"))
     end
 
