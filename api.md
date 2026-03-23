@@ -13,6 +13,7 @@
 > | [上传文件](#上传文件--post-apiuploadpath) | `POST` | `/api/upload/<path>` | 上传单个文件 |
 > | [实时图片处理](#实时图片处理--post-apiimg) | `POST` | `/api/img` | 二进制图片处理（缩放/裁切/转格式），高吞吐实时服务 |
 > | [批量图片处理](#批量图片处理--post-apibatch-img) | `POST` | `/api/batch-img` | 本地文件/目录批量处理，支持本地 vips 和远程算力两种模式 |
+> | [Gallery 整理](#gallery-整理--post-apigallerize) | `POST` | `/api/gallerize` | 整理 gallery 目录结构、生成封面、批量转换图片为 `.jiff` |
 
 ---
 
@@ -879,6 +880,7 @@ curl -X POST http://localhost:5080/api/batch-img \
 - **JSON 解析**：`parse_move_body()` 用正则从 JSON 字符串提取 `from`/`to`/`overwrite`，无需 `cjson` 依赖
 - **安全性**：所有路径均检测 `..`（400）并验证最终路径仍在 `webdav_root` 内（403）
 
+
 ### 批量图片处理 API（`lib/batchapi.lua`）
 
 - **模块**：`nginx/lua/lib/batchapi.lua`，路由在 `nginx/conf/default_app/main.conf`
@@ -888,3 +890,129 @@ curl -X POST http://localhost:5080/api/batch-img \
 - **输出命名**：三种方式：原地覆盖、`out_suffix`（插入文件名后缀）、`out_dir`（写到新目录）
 - **文件扫描**：LuaJIT FFI `opendir/readdir`，可选递归子目录，支持过滤非图片文件
 - **安全性**：检测路径 `..`（400），`webdav_root` 相对路径自动补全
+
+---
+
+## Gallery 整理 — `POST /api/gallerize`
+
+对服务器本地 gallery 目录进行整理：规范化目录结构、生成封面缩略图、将所有图片批量转换为 `.jiff`（WebP 格式，扩展名重命名）。
+
+### 请求参数
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✅ | 目标目录路径（相对于 webdav root） |
+| `type` | string | ✅ | 处理类型：`"v1"` 或 `"v2"`；其他值返回 **403** |
+| `extra_file_path` | string | — | 非图片文件的目标目录，绝对或相对路径均可 |
+| `w` | int | — | 图片转换目标宽度（默认 `2560`） |
+| `h` | int | — | 图片转换目标高度（默认 `2560`） |
+| `fit` | string | — | 缩放模式（默认 `contain`） |
+| `q` | int | — | 输出质量 1-100（默认 `90`） |
+
+### Type `v1` 处理步骤
+
+```
+POST /api/gallerize
+{"path": "/comics/my-collection", "type": "v1", "extra_file_path": "/trash/extras"}
+```
+
+**步骤 0 — 幂等跳过检测（Step 5 in spec）**  
+若目录中所有可处理图片都已是 `.jiff` 且存在 `##cover.jiff`，认为该 gallery 已处理完毕，直接返回 `{"ok":true,"skipped":true}`。
+
+**步骤 1 — 移动非图片文件**  
+将根目录（非子目录）中的非图片文件移动到 `extra_file_path`。  
+若未指定 `extra_file_path`，此步骤跳过。
+
+**步骤 2 — 扁平化目录结构**  
+- 保留第一层子目录（每个子目录视为一个独立 gallery）
+- 将二级及更深层子目录中的图片文件上移到其所在的第一层目录
+- 嵌套目录中的非图片文件同样移动到 `extra_file_path`
+- 清理空目录
+
+**步骤 3 — 单 gallery 提升**  
+若整理后只有一个第一层子目录，认为这是单一 gallery，将其内容全部提升至根目录，删除空子目录。
+
+**步骤 4 — 目录名校验**  
+检查所有第一层子目录名称是否兼容 Windows 文件系统：
+- 不超过 38 个字符
+- 无非法字符：`< > : " / \ | ? *`
+- 非保留名：`CON PRN AUX NUL COM1-9 LPT1-9`
+- 不以空格或 `.` 结尾
+- 校验失败返回 **400**
+
+**步骤 5 — 生成封面 `##cover.jiff`**  
+- 若目录已有 `##cover.jiff`，跳过
+- 否则取目录内按文件名排序的第一张图片，生成封面缩略图
+- 封面规格：**360×504 cover fit、WebP、q=80**，文件名固定为 `##cover.jiff`
+- 多 gallery 场景：每个第一层子目录各自生成封面
+- 单 gallery 场景（step 3 提升后）：在根目录生成封面
+
+**步骤 6 — 批量转换图片**  
+- 将目录中所有非 `.jiff` 图片转换为 `.jiff`（实为 WebP 内容）
+- 默认规格：**2560×2560 contain fit、WebP、q=90**，可通过请求参数覆盖
+- 转换成功后删除原文件（原地替换）
+- 多 gallery 场景：每个第一层子目录独立处理
+
+### 响应示例
+
+**多 gallery 场景成功：**
+```json
+{
+  "ok": true,
+  "path": "/comics/my-collection",
+  "type": "v1",
+  "steps": {
+    "move_non_images": {"count": 2},
+    "flatten": {"dirs": ["gallery_a", "gallery_b"]},
+    "promote": {"performed": false},
+    "covers": {
+      "gallery_a": {"generated": true, "details": {"source":"img1.png","cover":"##cover.jiff","width":360,"height":504}},
+      "gallery_b": {"generated": true, "details": {"source":"img3.jpeg","cover":"##cover.jiff","width":360,"height":504}}
+    },
+    "convert": {"processed": 3, "skipped": 0, "errors": {}}
+  }
+}
+```
+
+**单 gallery 提升场景成功：**
+```json
+{
+  "ok": true,
+  "path": "/comics/single-book",
+  "type": "v1",
+  "steps": {
+    "flatten": {"dirs": ["chapter"]},
+    "promote": {"performed": true, "dir": "chapter"},
+    "covers": {".": {"generated": true, "details": {"source":"page001.jpg","cover":"##cover.jiff","width":360,"height":504}}},
+    "convert": {"processed": 120, "skipped": 0, "errors": {}}
+  }
+}
+```
+
+**已处理，跳过：**
+```json
+{"ok": true, "skipped": true, "reason": "gallery already processed"}
+```
+
+### 错误码
+
+| HTTP | error | 说明 |
+|------|-------|------|
+| 400 | `bad_request` | 缺少必填字段、路径穿越、目录名不符规范 |
+| 403 | `forbidden` | `type` 不为 `v1`/`v2`；路径超出 webdav root |
+| 404 | `not_found` | 目标目录不存在 |
+| 405 | `method_not_allowed` | 非 POST 请求 |
+
+### 关于 `.jiff` 格式
+
+`.jiff` 是 WebP 图片的重命名扩展名，内容与 `.webp` 完全一致，只是文件名后缀不同。使用 `.jiff` 的目的是：
+- 与未处理的原始图片文件区分（通过扩展名快速判断是否已转换）
+- 对文件管理器的 WebP 预览支持不做假设，可配置关联程序
+
+### 实现细节
+
+- **模块**：`nginx/lua/lib/gallerize.lua`，复用 `lib/imgproc.lua` 的处理核心
+- **文件操作**：LuaJIT FFI `opendir/readdir/rename/mkdir/rmdir/unlink`，零 shell 调用
+- **幂等性**：重复请求已处理的目录会立即返回 skip，不做任何修改
+- **动态图保护**：继承 `imgproc` 的动态 WebP/GIF 检测，自动跳过不处理
+- **安全性**：`..` 路径穿越检测（400），路径必须在 webdav root 范围内（403）
