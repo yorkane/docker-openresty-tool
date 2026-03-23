@@ -370,11 +370,14 @@ function _M.load_from_file(path, src_ext, params)
         return false, reason
     end
 
-    local load_opts = "[access=sequential]"
+    -- vips requires all options in a single [...] block, comma-separated
+    -- e.g. [access=sequential,shrink=8] NOT [access=sequential][shrink=8]
     local ext = src_ext:lower()
+    local load_opts
     if (ext == "jpg" or ext == "jpeg") and (params.w or params.h) then
-        local hint = _M.jpeg_shrink_hint(0, params.w, params.h)
-        if hint then load_opts = "[access=sequential]" .. hint end
+        load_opts = "[access=sequential,shrink=8]"
+    else
+        load_opts = "[access=sequential]"
     end
 
     local ok, vips = pcall(require, "vips")
