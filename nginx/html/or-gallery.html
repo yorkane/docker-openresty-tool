@@ -219,8 +219,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   width: 100%; height: 100%;
 }
 .page-img-wrap.fit img {
-  max-width: 100%; max-height: 100%;
-  width: auto; height: auto;
+  width: 100%; height: 100%;
+  max-width: none; max-height: none;
   object-fit: contain;
   user-select: none; -webkit-user-drag: none;
   display: block;
@@ -422,7 +422,6 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div id="toolbar">
     <button class="btn" id="btn-back" title="返回上级 (B)">←</button>
     <div class="breadcrumb"><span id="breadcrumb-text">/</span></div>
-    <button class="btn" id="btn-gallerize" title="整理为 Gallery (v1)">✨ Gallerize</button>
     <button class="btn" id="btn-del-mode" title="删除模式">🗑</button>
   </div>
 
@@ -461,6 +460,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <button class="btn" id="rbtn-view" title="视图模式 (O)">Fit</button>
       <button class="btn" id="rbtn-rotate" title="旋转 (V)">🔄</button>
       <button class="btn" id="rbtn-fs" title="全屏 (F)">⛶</button>
+      <button class="btn" id="rbtn-gallerize" title="整理为 Gallery (v1)">✨ Gallerize</button>
       <button class="btn danger" id="rbtn-del" title="删除当前图 (Del)">🗑</button>
     </div>
     <div id="page-canvas">
@@ -773,10 +773,10 @@ const Gallerize = {
   init() {
     // Restore persisted settings
     this._mode      = localStorage.getItem(this.LS_MODE) || 'local';
-    this._remoteUrl = localStorage.getItem(this.LS_REMOTE) || '';
+    this.    _remoteUrl = localStorage.getItem(this.LS_REMOTE) || '';
 
-    // Wire toolbar button
-    document.getElementById('btn-gallerize').addEventListener('click', () => this.open());
+    // Wire reader toolbar button (button is now in reader-view toolbar)
+    document.getElementById('rbtn-gallerize').addEventListener('click', () => this.open());
 
     // Wire modal close buttons
     document.getElementById('gz-close').addEventListener('click', () => this.close());
@@ -1480,8 +1480,11 @@ const GalleryView = {
       // vips 缩略图失败时回退到原图
       const fallback = fileUrl(coverPath, coverItem.name);
       if (img.src !== fallback) {
+        // Clear onerror to prevent infinite retry loop
+        img.onerror = null;
         img.src = fallback;
       } else {
+        // 原图也失败，移除图片元素
         img.remove();
       }
     };
@@ -2191,6 +2194,9 @@ const Reader = {
    KEYBOARD HANDLER
 ═══════════════════════════════════════════════════ */
 document.addEventListener('keydown', e => {
+  // Ignore keyboard shortcuts when focus is in an input/textarea
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
   const inReader = Reader.el.classList.contains('active');
 
   if (inReader) {
