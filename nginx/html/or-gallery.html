@@ -298,6 +298,122 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 #status-msg .status-icon { font-size: 48px; }
 #status-msg .status-text { font-size: 16px; }
 #status-msg .status-sub { font-size: 13px; }
+
+/* ─── Gallerize Modal ─── */
+#gallerize-modal {
+  display: none; position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,.7); align-items: center; justify-content: center;
+}
+#gallerize-modal.show { display: flex; }
+#gallerize-box {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px 24px 24px;
+  width: min(480px, 92vw); max-height: 90vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px;
+}
+#gallerize-box h3 {
+  font-size: 15px; font-weight: 600; color: var(--text);
+  margin: 0; display: flex; align-items: center; gap: 8px;
+}
+#gallerize-box .modal-close {
+  margin-left: auto; cursor: pointer; font-size: 18px;
+  color: var(--text2); background: none; border: none; line-height: 1;
+  padding: 2px 6px; border-radius: 4px;
+}
+#gallerize-box .modal-close:hover { color: var(--text); background: var(--bg3); }
+
+/* Mode selector */
+.gz-mode-row {
+  display: flex; gap: 8px;
+}
+.gz-mode-btn {
+  flex: 1; padding: 8px 0; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg3);
+  color: var(--text2); cursor: pointer; font-size: 13px; font-weight: 500;
+  transition: all .15s; text-align: center;
+}
+.gz-mode-btn.active {
+  border-color: var(--accent); background: rgba(126,184,247,.12);
+  color: var(--accent);
+}
+.gz-mode-btn:hover:not(.active) { background: #2d2d2d; color: var(--text); }
+
+/* Remote URL config */
+.gz-remote-section {
+  display: none; flex-direction: column; gap: 8px;
+}
+.gz-remote-section.show { display: flex; }
+.gz-label { font-size: 12px; color: var(--text2); }
+.gz-input {
+  width: 100%; height: 34px; padding: 0 10px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 13px;
+}
+.gz-input:focus { outline: none; border-color: var(--accent); }
+.gz-hint { font-size: 11px; color: var(--text2); }
+
+/* Path info */
+.gz-path-row {
+  background: var(--bg3); border-radius: 6px; padding: 8px 10px;
+  font-size: 12px; color: var(--text2); word-break: break-all;
+  border: 1px solid var(--border);
+}
+.gz-path-row strong { color: var(--text); }
+
+/* Action buttons */
+.gz-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.gz-btn {
+  padding: 7px 16px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); cursor: pointer;
+  font-size: 13px; font-weight: 500; transition: background .15s;
+}
+.gz-btn:hover { background: #333; }
+.gz-btn.primary {
+  background: var(--accent); color: #111; border-color: var(--accent);
+}
+.gz-btn.primary:hover { background: #9acbfa; }
+.gz-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Progress / result */
+.gz-progress {
+  display: none; flex-direction: column; gap: 10px;
+}
+.gz-progress.show { display: flex; }
+.gz-progress-bar-wrap {
+  height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden;
+}
+.gz-progress-bar {
+  height: 100%; background: var(--accent);
+  border-radius: 3px; transition: width .4s;
+}
+.gz-progress-text {
+  font-size: 12px; color: var(--text2);
+}
+.gz-result {
+  display: none; flex-direction: column; gap: 8px;
+}
+.gz-result.show { display: flex; }
+.gz-result-summary {
+  font-size: 13px; color: var(--text);
+  padding: 10px 12px; border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+}
+.gz-result-summary.ok { border-color: #4caf50; }
+.gz-result-summary.err { border-color: var(--danger); }
+.gz-stat-row {
+  display: flex; gap: 16px; font-size: 12px; color: var(--text2); flex-wrap: wrap;
+}
+.gz-stat-row span strong { color: var(--text); }
+.gz-errors {
+  max-height: 120px; overflow-y: auto;
+  font-size: 11px; color: var(--danger);
+  background: rgba(224,82,82,.08); border-radius: 4px;
+  padding: 6px 8px; border: 1px solid rgba(224,82,82,.2);
+}
+.gz-errors div { margin-bottom: 2px; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -306,6 +422,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div id="toolbar">
     <button class="btn" id="btn-back" title="返回上级 (B)">←</button>
     <div class="breadcrumb"><span id="breadcrumb-text">/</span></div>
+    <button class="btn" id="btn-gallerize" title="整理为 Gallery (v1)">✨ Gallerize</button>
     <button class="btn" id="btn-del-mode" title="删除模式">🗑</button>
   </div>
 
@@ -355,6 +472,59 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 <!-- ─── OSD ─── -->
 <div id="osd"></div>
+
+<!-- ─── Gallerize Modal ─── -->
+<div id="gallerize-modal">
+  <div id="gallerize-box">
+    <h3>✨ Gallerize
+      <button class="modal-close" id="gz-close">✕</button>
+    </h3>
+
+    <!-- Current path -->
+    <div class="gz-path-row">
+      整理目录：<strong id="gz-path-display">/</strong>
+    </div>
+
+    <!-- Mode selector -->
+    <div>
+      <div class="gz-label" style="margin-bottom:6px">执行模式</div>
+      <div class="gz-mode-row">
+        <button class="gz-mode-btn active" data-mode="local">🖥 Local</button>
+        <button class="gz-mode-btn" data-mode="remote">🌐 Remote</button>
+      </div>
+    </div>
+
+    <!-- Remote config (hidden when local) -->
+    <div class="gz-remote-section" id="gz-remote-section">
+      <div class="gz-label">远程服务地址</div>
+      <input class="gz-input" id="gz-remote-url" type="url"
+             placeholder="http://192.168.1.100:8080"
+             autocomplete="off" spellcheck="false">
+      <div class="gz-hint">填写远端 OpenResty 服务的根地址，将转发到 /api/gallerize</div>
+    </div>
+
+    <!-- Progress bar (shown during processing) -->
+    <div class="gz-progress" id="gz-progress">
+      <div class="gz-progress-text" id="gz-progress-text">正在处理…</div>
+      <div class="gz-progress-bar-wrap">
+        <div class="gz-progress-bar" id="gz-progress-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Result (shown after done) -->
+    <div class="gz-result" id="gz-result">
+      <div class="gz-result-summary" id="gz-result-summary"></div>
+      <div class="gz-stat-row" id="gz-stat-row"></div>
+      <div class="gz-errors" id="gz-errors" style="display:none"></div>
+    </div>
+
+    <!-- Action buttons -->
+    <div class="gz-actions">
+      <button class="gz-btn" id="gz-cancel">取消</button>
+      <button class="gz-btn primary" id="gz-run">开始整理</button>
+    </div>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -587,6 +757,276 @@ const Settings = {
   set(k, v) { this._data[k] = v; this.save(); },
 };
 Settings.load();
+
+/* ═══════════════════════════════════════════════════
+   GALLERIZE CONTROLLER
+═══════════════════════════════════════════════════ */
+const Gallerize = {
+  // ── localStorage keys ──────────────────────────────
+  LS_MODE: 'or-gallery-gz-mode',   // 'local' | 'remote'
+  LS_REMOTE: 'or-gallery-gz-remote', // remote base URL
+
+  _mode: 'local',      // current selected mode
+  _remoteUrl: '',      // remote base URL
+  _running: false,
+
+  init() {
+    // Restore persisted settings
+    this._mode      = localStorage.getItem(this.LS_MODE) || 'local';
+    this._remoteUrl = localStorage.getItem(this.LS_REMOTE) || '';
+
+    // Wire toolbar button
+    document.getElementById('btn-gallerize').addEventListener('click', () => this.open());
+
+    // Wire modal close buttons
+    document.getElementById('gz-close').addEventListener('click', () => this.close());
+    document.getElementById('gz-cancel').addEventListener('click', () => this.close());
+    document.getElementById('gallerize-modal').addEventListener('click', e => {
+      if (e.target === document.getElementById('gallerize-modal')) this.close();
+    });
+
+    // Mode selector
+    document.querySelectorAll('.gz-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._mode = btn.dataset.mode;
+        localStorage.setItem(this.LS_MODE, this._mode);
+        this._syncModeUI();
+      });
+    });
+
+    // Remote URL input — persist on change
+    document.getElementById('gz-remote-url').addEventListener('input', e => {
+      this._remoteUrl = e.target.value.trim();
+      localStorage.setItem(this.LS_REMOTE, this._remoteUrl);
+    });
+
+    // Run button
+    document.getElementById('gz-run').addEventListener('click', () => this.run());
+  },
+
+  open() {
+    const path = GalleryView._path || '/';
+    document.getElementById('gz-path-display').textContent = path;
+
+    // Restore UI state
+    this._syncModeUI();
+    document.getElementById('gz-remote-url').value = this._remoteUrl;
+
+    // Reset progress & result
+    this._setRunning(false);
+    document.getElementById('gz-progress').classList.remove('show');
+    document.getElementById('gz-result').classList.remove('show');
+    document.getElementById('gz-run').textContent = '开始整理';
+    document.getElementById('gz-run').disabled = false;
+
+    document.getElementById('gallerize-modal').classList.add('show');
+  },
+
+  close() {
+    if (this._running) return; // prevent close while running
+    document.getElementById('gallerize-modal').classList.remove('show');
+  },
+
+  _syncModeUI() {
+    document.querySelectorAll('.gz-mode-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === this._mode);
+    });
+    document.getElementById('gz-remote-section').classList.toggle('show', this._mode === 'remote');
+  },
+
+  _setRunning(v) {
+    this._running = v;
+    document.getElementById('gz-run').disabled = v;
+    document.getElementById('gz-cancel').disabled = v;
+    document.getElementById('gz-close').style.pointerEvents = v ? 'none' : '';
+    // Disable mode buttons during run
+    document.querySelectorAll('.gz-mode-btn').forEach(btn => { btn.disabled = v; });
+  },
+
+  // Animate progress bar (fake progress until we get a response)
+  _startFakeProgress() {
+    const bar = document.getElementById('gz-progress-bar');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+    // Give browser a frame to apply the reset
+    requestAnimationFrame(() => {
+      bar.style.transition = 'width 25s cubic-bezier(0,.6,.3,1)';
+      bar.style.width = '85%';
+    });
+  },
+
+  _finishProgress(ok) {
+    const bar = document.getElementById('gz-progress-bar');
+    bar.style.transition = 'width .3s ease';
+    bar.style.width = ok ? '100%' : '0%';
+  },
+
+  async run() {
+    const path = GalleryView._path || '/';
+
+    // Validate remote URL if needed
+    if (this._mode === 'remote') {
+      const url = this._remoteUrl.trim();
+      if (!url) {
+        document.getElementById('gz-remote-url').focus();
+        showOsd('请填写远程服务地址', 2000);
+        return;
+      }
+    }
+
+    this._setRunning(true);
+
+    // Show progress
+    document.getElementById('gz-result').classList.remove('show');
+    const progressEl = document.getElementById('gz-progress');
+    progressEl.classList.add('show');
+    document.getElementById('gz-progress-text').textContent = '正在处理，请稍候…';
+    document.getElementById('gz-run').textContent = '处理中…';
+    this._startFakeProgress();
+
+    try {
+      const result = await this._callApi(path);
+      this._finishProgress(true);
+      document.getElementById('gz-progress-text').textContent = '完成';
+      this._showResult(result);
+
+      // Refresh gallery if run succeeded and not skipped
+      if (result.ok && !result.skipped) {
+        setTimeout(() => {
+          GalleryView.grid.innerHTML = '';
+          GalleryView.loadPage();
+        }, 800);
+      }
+    } catch (err) {
+      this._finishProgress(false);
+      document.getElementById('gz-progress-text').textContent = '请求失败: ' + err.message;
+      this._showError(err.message);
+    } finally {
+      this._setRunning(false);
+      document.getElementById('gz-run').textContent = '再次执行';
+      document.getElementById('gz-run').disabled = false;
+      document.getElementById('gz-cancel').textContent = '关闭';
+      document.getElementById('gz-cancel').disabled = false;
+    }
+  },
+
+  async _callApi(path) {
+    const body = JSON.stringify({ path, type: 'v1' });
+    const headers = { 'Content-Type': 'application/json' };
+
+    let url;
+    if (this._mode === 'local') {
+      url = '/api/gallerize';
+    } else {
+      const base = this._remoteUrl.replace(/\/+$/, '');
+      url = base + '/api/gallerize';
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+      // Long timeout for large galleries
+      signal: AbortSignal.timeout ? AbortSignal.timeout(300_000) : undefined,
+    });
+
+    const json = await res.json().catch(() => ({ ok: false, message: `HTTP ${res.status}` }));
+    if (!res.ok) {
+      throw new Error(json.message || `HTTP ${res.status}`);
+    }
+    return json;
+  },
+
+  _showResult(r) {
+    const summaryEl = document.getElementById('gz-result-summary');
+    const statEl    = document.getElementById('gz-stat-row');
+    const errEl     = document.getElementById('gz-errors');
+
+    if (r.skipped) {
+      summaryEl.className = 'gz-result-summary ok';
+      summaryEl.textContent = '✓ 已跳过（目录已完成整理，无需重复处理）';
+      statEl.innerHTML = '';
+      errEl.style.display = 'none';
+    } else if (r.ok) {
+      summaryEl.className = 'gz-result-summary ok';
+      summaryEl.textContent = '✓ 整理完成';
+
+      // Parse steps from the nested object returned by gallerize.lua
+      const steps = r.steps || {};
+      const parts = [];
+
+      // move_non_images step
+      const moveStep = steps.move_non_images;
+      if (moveStep && moveStep.count !== undefined) {
+        parts.push(`<span>移出非图片 <strong>${moveStep.count}</strong> 个</span>`);
+      }
+
+      // flatten step
+      const flatStep = steps.flatten;
+      if (flatStep && flatStep.dirs !== undefined) {
+        parts.push(`<span>扁平化目录 <strong>${flatStep.dirs}</strong> 个</span>`);
+      }
+
+      // promote step
+      const promoteStep = steps.promote;
+      if (promoteStep && promoteStep.performed) {
+        const dirName = promoteStep.dir ? ` (${promoteStep.dir})` : '';
+        parts.push(`<span>单目录提升${escHtml(dirName)}</span>`);
+      }
+
+      // covers step — object: { "dirName": {generated, details}, ... }
+      const coversStep = steps.covers;
+      if (coversStep) {
+        let coverOk = 0, coverFail = 0;
+        for (const k of Object.keys(coversStep)) {
+          const c = coversStep[k];
+          if (c && c.generated) coverOk++; else coverFail++;
+        }
+        parts.push(`<span>封面 <strong>${coverOk}</strong> 个${coverFail ? `（失败 ${coverFail}）` : ''}</span>`);
+      }
+
+      // convert step — {processed, skipped, errors}
+      const convStep = steps.convert;
+      if (convStep) {
+        if (convStep.processed !== undefined)
+          parts.push(`<span>转换 <strong>${convStep.processed}</strong> 张</span>`);
+        if (convStep.skipped !== undefined && convStep.skipped > 0)
+          parts.push(`<span>跳过 <strong>${convStep.skipped}</strong> 张</span>`);
+      }
+
+      statEl.innerHTML = parts.join('');
+
+      // Errors from convert step
+      const errors = (convStep && convStep.errors) || r.errors || [];
+      if (errors.length) {
+        errEl.style.display = '';
+        errEl.innerHTML = errors.map(e => {
+          const src = e.file || e.src || '';
+          const msg = e.error || String(e);
+          return `<div>⚠ ${escHtml(src)}: ${escHtml(msg)}</div>`;
+        }).join('');
+      } else {
+        errEl.style.display = 'none';
+      }
+    } else {
+      summaryEl.className = 'gz-result-summary err';
+      summaryEl.textContent = '✗ 失败: ' + (r.message || '未知错误');
+      statEl.innerHTML = '';
+      errEl.style.display = 'none';
+    }
+
+    document.getElementById('gz-result').classList.add('show');
+  },
+
+  _showError(msg) {
+    const summaryEl = document.getElementById('gz-result-summary');
+    summaryEl.className = 'gz-result-summary err';
+    summaryEl.textContent = '✗ ' + msg;
+    document.getElementById('gz-stat-row').innerHTML = '';
+    document.getElementById('gz-errors').style.display = 'none';
+    document.getElementById('gz-result').classList.add('show');
+  },
+};
 
 /* ═══════════════════════════════════════════════════
    ROUTER
@@ -1947,6 +2387,7 @@ const App = {
 ═══════════════════════════════════════════════════ */
 GalleryView.init();
 Reader.init();
+Gallerize.init();
 // Parse URL params and navigate
 const params = Router.getParams();
 App.navigate(params.path, true, { page: params.page, reader: params.reader });
