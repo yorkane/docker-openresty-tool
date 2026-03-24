@@ -758,7 +758,7 @@ local function convert_images_in_dir(dir_path, params, stats, remote_opts, concu
     end
 
     -- Concurrent mode (remote with concurrency > 1)
-    local sema = ngx semaphore.new(concurrency)
+    local sema = ngx.semaphore.new(concurrency)
     local threads = {}
 
     -- Spawn a thread for each task
