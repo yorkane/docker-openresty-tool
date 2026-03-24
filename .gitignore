@@ -14,6 +14,8 @@ luac.out
 # Test data
 /data/cache/
 /data/testdir/
+/data/test*
+/data/===*
 # luarocks build files
 *.src.rock
 *.zip
