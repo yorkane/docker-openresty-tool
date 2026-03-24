@@ -266,7 +266,11 @@ end
 function _M.process_pipeline(img, params, src_ext, opts)
     opts = opts or {}
     local ok, err
-    local prev_img = nil  -- previous img to close before assigning a new one
+
+    -- old_img tracks the image that was current BEFORE this step.
+    -- After each successful transformation we close old_img before replacing img.
+    -- This ensures every vips.Image is explicitly closed regardless of success/failure.
+    local old_img = nil
 
     -- Crop first if requested
     if params.crop then
@@ -278,9 +282,13 @@ function _M.process_pipeline(img, params, src_ext, opts)
             if cw > 0 and ch > 0 then
                 ok, err = pcall(function() return img:crop(cx, cy, cw, ch) end)
                 if ok then
-                    safe_close(prev_img)
-                    prev_img = img
+                    safe_close(old_img)
+                    old_img = img
                     img = err
+                else
+                    safe_close(old_img)
+                    safe_close(img)
+                    return false, "crop failed: " .. tostring(err)
                 end
             end
         end
@@ -299,9 +307,13 @@ function _M.process_pipeline(img, params, src_ext, opts)
                 return img:resize(tw / src_w, {vscale = th / src_h})
             end)
             if ok then
-                safe_close(prev_img)
-                prev_img = img
+                safe_close(old_img)
+                old_img = img
                 img = err
+            else
+                safe_close(old_img)
+                safe_close(img)
+                return false, "resize(fill) failed: " .. tostring(err)
             end
 
         elseif fit == "cover" then
@@ -310,18 +322,26 @@ function _M.process_pipeline(img, params, src_ext, opts)
             local scale = math.max(tw / src_w, th / src_h)
             ok, err = pcall(function() return img:resize(scale) end)
             if ok then
-                safe_close(prev_img)
-                prev_img = img
+                safe_close(old_img)
+                old_img = img
                 img = err
+            else
+                safe_close(old_img)
+                safe_close(img)
+                return false, "resize(cover) failed: " .. tostring(err)
             end
             local cx2 = math.floor((img:width()  - tw) / 2)
             local cy2 = math.floor((img:height() - th) / 2)
             if cx2 >= 0 and cy2 >= 0 then
                 ok, err = pcall(function() return img:crop(cx2, cy2, tw, th) end)
                 if ok then
-                    safe_close(prev_img)
-                    prev_img = img
+                    safe_close(old_img)
+                    old_img = img
                     img = err
+                else
+                    safe_close(old_img)
+                    safe_close(img)
+                    return false, "crop(cover) failed: " .. tostring(err)
                 end
             end
 
@@ -330,9 +350,13 @@ function _M.process_pipeline(img, params, src_ext, opts)
                 local scale = params.w / src_w
                 ok, err = pcall(function() return img:resize(scale) end)
                 if ok then
-                    safe_close(prev_img)
-                    prev_img = img
+                    safe_close(old_img)
+                    old_img = img
                     img = err
+                else
+                    safe_close(old_img)
+                    safe_close(img)
+                    return false, "resize(scale) failed: " .. tostring(err)
                 end
             end
 
@@ -343,9 +367,13 @@ function _M.process_pipeline(img, params, src_ext, opts)
             if scale ~= 1.0 then
                 ok, err = pcall(function() return img:resize(scale) end)
                 if ok then
-                    safe_close(prev_img)
-                    prev_img = img
+                    safe_close(old_img)
+                    old_img = img
                     img = err
+                else
+                    safe_close(old_img)
+                    safe_close(img)
+                    return false, "resize(contain) failed: " .. tostring(err)
                 end
             end
         end
@@ -357,8 +385,8 @@ function _M.process_pipeline(img, params, src_ext, opts)
     local out_height = img:height()
     ok, err = pcall(function() return img:write_to_buffer(save_suffix) end)
 
-    -- Close the final image; prev_img (intermediate) was already closed above each time
-    safe_close(prev_img)
+    -- Close all images regardless of encode success/failure
+    safe_close(old_img)
     safe_close(img)
 
     if not ok or not err then
