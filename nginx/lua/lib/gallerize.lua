@@ -42,14 +42,14 @@ local COVER_HEIGHT = 504
 local COVER_FIT = "cover"
 local COVER_FMT = "webp"
 local COVER_Q = 80
-local COVER_FILENAME = "##cover.jiff"
+local COVER_FILENAME = "##cover.jfif"
 
 local DEFAULT_WIDTH = 2560
 local DEFAULT_HEIGHT = 2560
 local DEFAULT_FIT = "contain"
 local DEFAULT_FMT = "webp"
 local DEFAULT_Q = 90
-local DEFAULT_OUT_EXT = "jiff"  -- renamed webp extension
+local DEFAULT_OUT_EXT = "jfif"  -- renamed webp extension
 
 local MAX_DIR_NAME_LEN = 38
 
