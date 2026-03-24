@@ -362,6 +362,45 @@ function _M.is_ext_ignored(ext, ignore_set)
     return ignore_set[ext:lower()] == true
 end
 
+-- Detect image format from content (magic bytes) — more reliable than Content-Type header
+-- Returns canonical extension or nil if unknown
+function _M.detect_format_from_content(data)
+    if not data or #data < 12 then return nil end
+    -- JPEG: FF D8 FF
+    if data:byte(1) == 0xFF and data:byte(2) == 0xD8 and data:byte(3) == 0xFF then
+        return "jpeg"
+    end
+    -- PNG: 89 50 4E 47 0D 0A 1A 0A
+    if data:byte(1) == 0x89 and data:byte(2) == 0x50 and data:byte(3) == 0x4E then
+        return "png"
+    end
+    -- GIF87a: 47 49 46 38 37 61
+    if data:sub(1, 6) == "GIF87a" then
+        return "gif"
+    end
+    -- GIF89a: 47 49 46 38 39 61
+    if data:sub(1, 6) == "GIF89a" then
+        return "gif"
+    end
+    -- WebP: 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
+    if data:sub(1, 4) == "RIFF" and data:sub(9, 12) == "WEBP" then
+        return "webp"
+    end
+    -- BMP: 42 4D
+    if data:byte(1) == 0x42 and data:byte(2) == 0x4D then
+        return "bmp"
+    end
+    -- TIFF (little endian): 49 49 2A 00
+    if data:byte(1) == 0x49 and data:byte(2) == 0x49 and data:byte(3) == 0x2A then
+        return "tiff"
+    end
+    -- TIFF (big endian): 4D 4D 00 2A
+    if data:byte(1) == 0x4D and data:byte(2) == 0x4D and data:byte(3) == 0x2A then
+        return "tiff"
+    end
+    return nil
+end
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- vips loader wrapper with animated skip support
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -374,8 +413,12 @@ function _M.load_from_buffer(body, src_ext, params)
         return false, reason  -- caller should passthrough
     end
 
+    -- Detect real format from content to avoid shrink on misidentified files
+    -- This fixes cases where Content-Type header doesn't match actual content
+    local real_ext = _M.detect_format_from_content(body)
+    local ext = (real_ext or src_ext):lower()
+
     local load_opts = ""
-    local ext = src_ext:lower()
     if (ext == "jpg" or ext == "jpeg") and (params.w or params.h) then
         local hint = _M.jpeg_shrink_hint(#body, params.w, params.h)
         if hint then load_opts = hint end
