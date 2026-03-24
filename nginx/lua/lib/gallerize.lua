@@ -79,6 +79,15 @@ local function json_str(s)
     return '"' .. s .. '"'
 end
 
+-- URL encode a string (for path parameters)
+local function url_encode(str)
+    if not str then return "" end
+    str = tostring(str)
+    return str:gsub("[^a-zA-Z0-9._~-]", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end)
+end
+
 local function err_response(code, msg)
     return string.format('{"error":%s,"message":%s}', json_str(code), json_str(msg))
 end
@@ -441,11 +450,21 @@ local function remote_process_image(src_path, dst_path, params, remote_opts)
     local mime = imgproc.MIME_OF_EXT and imgproc.MIME_OF_EXT[ext] or "application/octet-stream"
     local query = build_query(params)
 
-    local out, err = remote_send_one(
-        remote_opts.host, remote_opts.port, remote_opts.path,
-        query, body, mime, remote_opts.use_ssl
-    )
-    if not out then return false, err end
+    -- Retry logic: up to 3 attempts
+    local max_retries = 3
+    local out, err
+    for attempt = 1, max_retries do
+        out, err = remote_send_one(
+            remote_opts.host, remote_opts.port, remote_opts.path,
+            query, body, mime, remote_opts.use_ssl
+        )
+        if out then break end
+        if attempt < max_retries then
+            ngx.log(ngx.ERR, "GALLERIZE: remote send failed (attempt ", attempt, "): ", err, " - retrying...")
+            ngx.sleep(0.5)  -- Wait 500ms before retry
+        end
+    end
+    if not out then return false, "retry failed: " .. err end
 
     local wfh = io.open(dst_path, "wb")
     if not wfh then return false, "cannot create: " .. dst_path end
@@ -862,7 +881,7 @@ function _M.handle(webdav_root)
     local h = tonumber(body:match('"h"%s*:%s*(%d+)')) or DEFAULT_HEIGHT
     local fit = body:match('"fit"%s*:%s*"([^"]+)"') or DEFAULT_FIT
     local q = tonumber(body:match('"q"%s*:%s*(%d+)')) or DEFAULT_Q
-    local concurrency = tonumber(body:match('"concurrency"%s*:%s*(%d+)')) or 12
+    local concurrency = tonumber(body:match('"concurrency"%s*:%s*(%d+)')) or 4
 
     -- Validate required fields
     if not path then
