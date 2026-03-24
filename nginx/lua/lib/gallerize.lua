@@ -311,6 +311,125 @@ local function process_image(src_path, dst_path, params)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Remote image conversion helpers
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Parse http://host:port/path → host, port, path
+local function parse_url(url)
+    local host, port, path = url:match("^https?://([^:/]+):(%d+)(/.*)$")
+    if host then return host, tonumber(port), path end
+    host, path = url:match("^https?://([^/]+)(/.*)$")
+    if host then return host, 80, path end
+    return nil
+end
+
+-- Build query string for /api/img
+local function build_query(params)
+    local parts = {}
+    if params.w   then parts[#parts+1] = "w="   .. params.w   end
+    if params.h   then parts[#parts+1] = "h="   .. params.h   end
+    if params.fit then parts[#parts+1] = "fit=" .. params.fit end
+    if params.fmt then parts[#parts+1] = "fmt=" .. params.fmt end
+    if params.q   then parts[#parts+1] = "q="   .. params.q   end
+    return table.concat(parts, "&")
+end
+
+-- Send one image to remote /api/img via HTTP/1.1, return response body or nil, err
+local function remote_send_one(host, port, path_base, query, body, mime)
+    local connect_ms = 5000
+    local send_ms    = 60000
+    local recv_ms    = 120000
+
+    local sock = ngx.socket.tcp()
+    sock:settimeout(connect_ms)
+    local ok, err = sock:connect(host, port)
+    if not ok then return nil, "connect failed: " .. tostring(err) end
+
+    sock:settimeout(send_ms)
+    local req_path = query ~= "" and (path_base .. "?" .. query) or path_base
+    local req = table.concat({
+        "POST " .. req_path .. " HTTP/1.1\r\n",
+        "Host: " .. host .. ":" .. tostring(port) .. "\r\n",
+        "Content-Type: " .. (mime or "application/octet-stream") .. "\r\n",
+        "Content-Length: " .. #body .. "\r\n",
+        "Connection: keep-alive\r\n",
+        "Accept: */*\r\n",
+        "\r\n",
+    })
+    local bytes, serr = sock:send(req)
+    if not bytes then sock:close(); return nil, "send header: " .. tostring(serr) end
+    bytes, serr = sock:send(body)
+    if not bytes then sock:close(); return nil, "send body: " .. tostring(serr) end
+
+    sock:settimeout(recv_ms)
+    local status_line, rerr = sock:receive("*l")
+    if not status_line then sock:close(); return nil, "recv status: " .. tostring(rerr) end
+
+    local status_code = tonumber(status_line:match("HTTP/%S+%s+(%d+)")) or 0
+    local content_length
+
+    while true do
+        local line, lerr = sock:receive("*l")
+        if not line or lerr then break end
+        if line == "" or line == "\r" then break end
+        local k, v = line:match("^([^:]+):%s*(.+)$")
+        if k then
+            local kl = k:lower():gsub("%s", "")
+            if kl == "content-length" then content_length = tonumber(v) end
+        end
+    end
+
+    if status_code ~= 200 then
+        local eb = ""
+        if content_length and content_length > 0 then
+            eb = sock:receive(math.min(content_length, 512)) or ""
+        end
+        sock:setkeepalive(10000, 64)
+        return nil, "remote " .. status_code .. ": " .. eb
+    end
+
+    local resp_body
+    if content_length then
+        resp_body, rerr = sock:receive(content_length)
+        if not resp_body then sock:close(); return nil, "recv body: " .. tostring(rerr) end
+    else
+        local chunks = {}
+        while true do
+            local chunk = sock:receive(65536)
+            if not chunk then break end
+            chunks[#chunks+1] = chunk
+        end
+        resp_body = table.concat(chunks)
+    end
+    sock:setkeepalive(10000, 64)
+    return resp_body
+end
+
+-- Convert one image via remote /api/img; returns ok, err
+local function remote_process_image(src_path, dst_path, params, remote_opts)
+    local fh = io.open(src_path, "rb")
+    if not fh then return false, "cannot open: " .. src_path end
+    local body = fh:read("*a")
+    fh:close()
+
+    local ext  = get_ext(src_path)
+    local mime = imgproc.MIME_OF_EXT and imgproc.MIME_OF_EXT[ext] or "application/octet-stream"
+    local query = build_query(params)
+
+    local out, err = remote_send_one(
+        remote_opts.host, remote_opts.port, remote_opts.path,
+        query, body, mime
+    )
+    if not out then return false, err end
+
+    local wfh = io.open(dst_path, "wb")
+    if not wfh then return false, "cannot create: " .. dst_path end
+    wfh:write(out)
+    wfh:close()
+    return true, { size = #out }
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Gallerize v1 logic
 -- ─────────────────────────────────────────────────────────────────────────────
 
@@ -567,7 +686,7 @@ local function generate_covers(root_path, results)
 end
 
 -- Step 7: Convert all images in a directory
-local function convert_images_in_dir(dir_path, params, stats)
+local function convert_images_in_dir(dir_path, params, stats, remote_opts)
     stats = stats or {processed = 0, skipped = 0, errors = {}}
     local entries = list_dir(dir_path)
     if not entries then return stats end
@@ -579,9 +698,15 @@ local function convert_images_in_dir(dir_path, params, stats)
                 local dst_name = e.name:gsub("%.[^./]+$", "") .. "." .. DEFAULT_OUT_EXT
                 local dst_path = dir_path .. "/" .. dst_name
 
-                local ok, result = process_image(e.path, dst_path, params)
+                local ok, result
+                if remote_opts then
+                    ok, result = remote_process_image(e.path, dst_path, params, remote_opts)
+                else
+                    ok, result = process_image(e.path, dst_path, params)
+                end
+
                 if ok then
-                    if result.skipped then
+                    if result and result.skipped then
                         stats.skipped = stats.skipped + 1
                     else
                         stats.processed = stats.processed + 1
@@ -598,18 +723,18 @@ local function convert_images_in_dir(dir_path, params, stats)
 end
 
 -- Convert images in root and all first-level subdirectories
-local function convert_all_images(root_path, params, stats)
+local function convert_all_images(root_path, params, stats, remote_opts)
     stats = stats or {processed = 0, skipped = 0, errors = {}}
 
     -- Convert images in root
-    convert_images_in_dir(root_path, params, stats)
+    convert_images_in_dir(root_path, params, stats, remote_opts)
 
     -- Convert images in each first-level subdirectory
     local entries = list_dir(root_path)
     if entries then
         for _, e in ipairs(entries) do
             if e.is_dir then
-                convert_images_in_dir(e.path, params, stats)
+                convert_images_in_dir(e.path, params, stats, remote_opts)
             end
         end
     end
@@ -658,6 +783,7 @@ function _M.handle(webdav_root)
     local path = body:match('"path"%s*:%s*"([^"]+)"')
     local gtype = body:match('"type"%s*:%s*"([^"]+)"')
     local extra_file_path = body:match('"extra_file_path"%s*:%s*"([^"]+)"')
+    local remote_url = body:match('"remote_url"%s*:%s*"([^"]+)"')
 
     -- Extract optional image params with defaults
     local w = tonumber(body:match('"w"%s*:%s*(%d+)')) or DEFAULT_WIDTH
@@ -683,6 +809,8 @@ function _M.handle(webdav_root)
         return send_json(400, err_response("bad_request", "path traversal not allowed"))
     end
 
+    -- Normalize path: strip trailing slashes, ensure leading slash
+    path = "/" .. path:gsub("^/+", ""):gsub("/+$", "")
     local abs_path = webdav_root .. path
     if not is_safe_path(webdav_root, abs_path) then
         return send_json(403, err_response("forbidden", "path outside webdav root"))
@@ -702,7 +830,7 @@ function _M.handle(webdav_root)
         end
         -- Handle both absolute and relative paths
         if extra_file_path:sub(1, 1) == "/" then
-            abs_extra_path = webdav_root .. extra_file_path
+            abs_extra_path = webdav_root .. "/" .. extra_file_path:gsub("^/+", "")
         else
             abs_extra_path = abs_path .. "/" .. extra_file_path
         end
@@ -710,6 +838,17 @@ function _M.handle(webdav_root)
             return send_json(403, err_response("forbidden", "extra_file_path outside webdav root"))
         end
         mkdir_p(abs_extra_path)
+    end
+
+    -- Parse remote_url if provided (used for image conversion only)
+    local remote_opts = nil
+    if remote_url and remote_url ~= "" then
+        local rhost, rport, rpath = parse_url(remote_url)
+        if not rhost then
+            return send_json(400, err_response("bad_request", "invalid remote_url: " .. remote_url))
+        end
+        remote_opts = { host = rhost, port = rport, path = rpath }
+        ngx.log(ngx.ERR, "GALLERIZE: remote mode, converting via " .. rhost .. ":" .. rport .. rpath)
     end
 
     -- ─────────────────────────────────────────────────────────────────────────
@@ -786,7 +925,7 @@ function _M.handle(webdav_root)
             fmt = DEFAULT_FMT,
             q = q,
         }
-        local stats = convert_all_images(abs_path, img_params)
+        local stats = convert_all_images(abs_path, img_params, nil, remote_opts)
         result.steps.convert = stats
 
         return send_json(200, success_response(result))

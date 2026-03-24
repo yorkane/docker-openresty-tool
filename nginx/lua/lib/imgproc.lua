@@ -112,7 +112,11 @@ function _M.is_animated_webp(data)
     local pos = 13
     while pos + 8 <= #data do
         local chunk_id = data:sub(pos, pos+3)
-        local chunk_sz = string.unpack("<I4", data, pos+4)
+        local b0 = data:byte(pos+4) or 0
+        local b1 = data:byte(pos+5) or 0
+        local b2 = data:byte(pos+6) or 0
+        local b3 = data:byte(pos+7) or 0
+        local chunk_sz = b0 + b1*256 + b2*65536 + b3*16777216
         if chunk_id == "VP8X" and pos + 8 < #data then
             local flags = data:byte(pos+8) or 0
             -- bit 1 (0x02) = animation flag

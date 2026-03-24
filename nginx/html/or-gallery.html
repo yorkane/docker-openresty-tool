@@ -500,7 +500,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <input class="gz-input" id="gz-remote-url" type="url"
              placeholder="http://192.168.1.100:8080"
              autocomplete="off" spellcheck="false">
-      <div class="gz-hint">填写远端 OpenResty 服务的根地址，将转发到 /api/gallerize</div>
+      <div class="gz-hint">填写远端 OpenResty 服务根地址，目录整理在本机执行，图片转换转发到远端 /api/img</div>
     </div>
 
     <!-- Progress bar (shown during processing) -->
@@ -911,21 +911,21 @@ const Gallerize = {
   },
 
   async _callApi(path) {
-    const body = JSON.stringify({ path, type: 'v1' });
     const headers = { 'Content-Type': 'application/json' };
 
-    let url;
-    if (this._mode === 'local') {
-      url = '/api/gallerize';
-    } else {
+    // Always call local /api/gallerize.
+    // In remote mode, pass remote_url so the server uses it for image conversion only.
+    // Directory operations (flatten, cover, move) always run locally on this server.
+    const bodyObj = { path, type: 'v1' };
+    if (this._mode === 'remote') {
       const base = this._remoteUrl.replace(/\/+$/, '');
-      url = base + '/api/gallerize';
+      bodyObj.remote_url = base + '/api/img';
     }
 
-    const res = await fetch(url, {
+    const res = await fetch('/api/gallerize', {
       method: 'POST',
       headers,
-      body,
+      body: JSON.stringify(bodyObj),
       // Long timeout for large galleries
       signal: AbortSignal.timeout ? AbortSignal.timeout(300_000) : undefined,
     });
