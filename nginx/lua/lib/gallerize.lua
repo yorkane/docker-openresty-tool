@@ -450,8 +450,9 @@ local function remote_process_image(src_path, dst_path, params, remote_opts)
     local mime = imgproc.MIME_OF_EXT and imgproc.MIME_OF_EXT[ext] or "application/octet-stream"
     local query = build_query(params)
 
-    -- Retry logic: up to 3 attempts
+    -- Retry logic: up to 3 attempts with increasing backoff (1s, 3s, 5s)
     local max_retries = 3
+    local retry_delays = {1, 3, 5}
     local out, err
     for attempt = 1, max_retries do
         out, err = remote_send_one(
@@ -460,8 +461,9 @@ local function remote_process_image(src_path, dst_path, params, remote_opts)
         )
         if out then break end
         if attempt < max_retries then
-            ngx.log(ngx.ERR, "GALLERIZE: remote send failed (attempt ", attempt, "): ", err, " - retrying...")
-            ngx.sleep(0.5)  -- Wait 500ms before retry
+            local delay = retry_delays[attempt] or 5
+            ngx.log(ngx.ERR, "GALLERIZE: remote send failed (attempt ", attempt, "): ", err, " - retrying in ", delay, "s...")
+            ngx.sleep(delay)
         end
     end
     if not out then return false, "retry failed: " .. err end
