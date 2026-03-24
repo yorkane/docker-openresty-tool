@@ -212,10 +212,38 @@ end
 -- JPEG shrink-on-load hint for faster decode
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Choose optimal shrink factor to balance decode speed and quality.
+-- Strategy: use the largest shrink that still keeps decoded size >= target size.
+-- Supported shrink factors: 1, 2, 4, 8 (libjpeg only supports powers of 2).
 function _M.jpeg_shrink_hint(body_len, target_w, target_h)
     if not target_w and not target_h then return nil end
-    -- libjpeg supports 1,2,4,8; we request 8 and let vips clamp
-    return "[shrink=8]"
+
+    -- Estimate original dimensions from file size (rough heuristic)
+    -- JPEG: ~1-3 bytes per pixel depending on quality
+    local estimated_pixels = body_len / 2  -- conservative estimate
+    local estimated_side = math.sqrt(estimated_pixels)
+
+    -- Determine maximum shrink that won't undershoot target
+    local max_shrink = 1
+    if target_w and estimated_side then
+        max_shrink = math.floor(estimated_side / target_w)
+    end
+    if target_h and estimated_side then
+        local max_h = math.floor(estimated_side / target_h)
+        max_shrink = math.min(max_shrink, max_h)
+    end
+
+    -- Clamp to powers of 2 supported by libjpeg: 1, 2, 4, 8
+    local shrink = 1
+    if max_shrink >= 8 then
+        shrink = 8
+    elseif max_shrink >= 4 then
+        shrink = 4
+    elseif max_shrink >= 2 then
+        shrink = 2
+    end
+
+    return "[shrink=" .. shrink .. "]"
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
