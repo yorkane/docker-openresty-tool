@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图片处理器</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3347;
+    --text: #e8eaf0;
+    --text2: #8b90a0;
+    --accent: #6c8aff;
+    --accent2: #a07cff;
+    --danger: #ff6b6b;
+    --success: #4ecb71;
+    --warn: #ffb86c;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  /* ── Header ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.02em;
+  }
+  .header-actions { display: flex; gap: 8px; margin-left: auto; }
+  /* ── Main Layout ── */
+  .main-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 240px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+    padding: 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .panel { display: flex; flex-direction: column; gap: 10px; }
+  .panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text2);
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  /* ── Canvas Area ── */
+  .canvas-area {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    background: var(--bg);
+    background-image:
+      linear-gradient(45deg, #1e2130 25%, transparent 25%),
+      linear-gradient(-45deg, #1e2130 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #1e2130 75%),
+      linear-gradient(-45deg, transparent 75%, #1e2130 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+    position: relative;
+  }
+  .canvas-wrap {
+    position: relative;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  }
+  #mainCanvas {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 56px - 60px);
+    cursor: crosshair;
+  }
+  /* Grid overlay on canvas */
+  #gridOverlay {
+    position: absolute;
+    top: 0; left: 0;
+    pointer-events: none;
+  }
+  /* Drop zone */
+  .drop-zone {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    color: var(--text2);
+    pointer-events: none;
+  }
+  .drop-zone .drop-icon {
+    width: 64px; height: 64px;
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    color: var(--text2);
+  }
+  .drop-zone p { font-size: 14px; }
+  .drop-zone.hidden { display: none; }
+  /* ── Bottom bar ── */
+  .bottom-bar {
+    height: 44px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text2);
+    flex-shrink: 0;
+  }
+  .bottom-bar span { white-space: nowrap; }
+  /* ── Buttons ── */
+  .btn {
+    padding: 7px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--border); }
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn.primary:hover { background: #5a7aee; }
+  .btn.danger { border-color: var(--danger); color: var(--danger); background: transparent; }
+  .btn.danger:hover { background: rgba(255,107,107,0.12); }
+  .btn.sm { padding: 4px 10px; font-size: 12px; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* ── Range Slider ── */
+  .range-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .range-row label { font-size: 12px; color: var(--text2); width: 36px; flex-shrink: 0; }
+  .range-row input[type=range] {
+    flex: 1;
+    height: 4px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .range-row .val { font-size: 11px; color: var(--accent); width: 36px; text-align: right; flex-shrink: 0; }
+  /* ── Toggle group ── */
+  .toggle-group {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .toggle-btn {
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text2);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .toggle-btn:hover { border-color: var(--accent); color: var(--text); }
+  .toggle-btn.active {
+    background: rgba(108,138,255,0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  /* ── Info row ── */
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  /* ── Divider ── */
+  .divider { height: 1px; background: var(--border); }
+  /* ── Aspect buttons ── */
+  .aspect-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+  .aspect-btn {
+    padding: 5px 4px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text2);
+    font-size: 11px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .aspect-btn:hover { border-color: var(--accent); color: var(--text); }
+  .aspect-btn.active {
+    background: rgba(108,138,255,0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  /* ── Split grid ── */
+  .split-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+  }
+  .split-btn {
+    padding: 6px 4px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text2);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .split-btn:hover { border-color: var(--accent); color: var(--text); }
+  .split-btn.active {
+    background: rgba(108,138,255,0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  /* ── File input ── */
+  .file-input { display: none; }
+  /* ── Canvas info overlay ── */
+  .canvas-info {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.65);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--text2);
+    pointer-events: none;
+  }
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <h1>🖼️ 图片处理器</h1>
+  <div class="header-actions">
+    <button class="btn primary" id="btnDownload">下载结果</button>
+    <button class="btn" id="btnReset">重置</button>
+  </div>
+</header>
+
+<div class="main-layout">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Load Image -->
+    <div class="panel">
+      <div class="panel-title">加载图片</div>
+      <button class="btn" id="btnOpen">📂 打开图片</button>
+      <input type="file" class="file-input" id="fileInput" accept="image/*">
+      <button class="btn" id="btnDropReset" style="display:none">🔄 清除图片</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Rotate & Flip -->
+    <div class="panel">
+      <div class="panel-title">旋转 / 翻转</div>
+      <div class="toggle-group">
+        <button class="toggle-btn" data-rotate="-90">↶ 90°</button>
+        <button class="toggle-btn" data-rotate="90">↷ 90°</button>
+        <button class="toggle-btn" data-rotate="180">↺ 180°</button>
+      </div>
+      <div class="toggle-group" style="margin-top:4px">
+        <button class="toggle-btn" data-flip="h">↔ 水平翻转</button>
+        <button class="toggle-btn" data-flip="v">↕ 垂直翻转</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Scale / Resize -->
+    <div class="panel">
+      <div class="panel-title">缩放</div>
+      <div class="range-row">
+        <label>宽</label>
+        <input type="range" id="scaleW" min="1" max="8000" value="0">
+        <span class="val" id="valW">—</span>
+      </div>
+      <div class="range-row">
+        <label>高</label>
+        <input type="range" id="scaleH" min="1" max="8000" value="0">
+        <span class="val" id="valH">—</span>
+      </div>
+      <div class="info-row">
+        <span>宽高比</span>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px">
+          <input type="checkbox" id="lockRatio" checked> 锁定
+        </label>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn sm" id="btnFitScreen" style="flex:1">适应窗口</button>
+        <button class="btn sm" id="btnApplyScale" style="flex:1">应用</button>
+      </div>
+      <!-- Preset scale -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
+        <button class="btn sm" data-scale="0.5">0.5×</button>
+        <button class="btn sm" data-scale="1">1×</button>
+        <button class="btn sm" data-scale="2">2×</button>
+        <button class="btn sm" data-scale="4">4×</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Crop -->
+    <div class="panel">
+      <div class="panel-title">裁切</div>
+      <div class="info-row">
+        <span>预设宽高比</span>
+      </div>
+      <div class="aspect-grid">
+        <button class="aspect-btn" data-aspect="free">自由</button>
+        <button class="aspect-btn" data-aspect="1:1">1:1</button>
+        <button class="aspect-btn" data-aspect="4:3">4:3</button>
+        <button class="aspect-btn" data-aspect="3:4">3:4</button>
+        <button class="aspect-btn" data-aspect="16:9">16:9</button>
+        <button class="aspect-btn" data-aspect="9:16">9:16</button>
+        <button class="aspect-btn" data-aspect="2:3">2:3</button>
+        <button class="aspect-btn" data-aspect="3:2">3:2</button>
+      </div>
+      <button class="btn" id="btnCrop" disabled>✂️ 应用裁切</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Grid Split -->
+    <div class="panel">
+      <div class="panel-title">网格分割</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">将图片均分为 N×N 块，单独导出每块</div>
+      <div class="split-grid">
+        <button class="split-btn" data-split="2">2×2</button>
+        <button class="split-btn" data-split="3">3×3</button>
+        <button class="split-btn" data-split="4">4×4</button>
+        <button class="split-btn" data-split="5">5×5</button>
+        <button class="split-btn" data-split="6">6×6</button>
+      </div>
+      <button class="btn" id="btnSplit" disabled>📦 导出所有分块</button>
+    </div>
+
+  </div>
+
+  <!-- Canvas -->
+  <div class="canvas-area" id="canvasArea">
+    <div class="canvas-wrap" id="canvasWrap" style="display:none">
+      <canvas id="mainCanvas"></canvas>
+      <canvas id="gridOverlay"></canvas>
+    </div>
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-icon">🖼️</div>
+      <p>拖放图片到这里，或点击「打开图片」</p>
+      <p style="font-size:12px;color:var(--text2)">支持 JPG / PNG / WebP / GIF / BMP / TIFF</p>
+    </div>
+    <div class="canvas-info" id="canvasInfo" style="display:none">
+      <span id="infoSize"></span> &nbsp;|&nbsp; <span id="infoZoom"></span>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="bottom-bar">
+  <span id="statusText">就绪</span>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════
+let originalImage = null;     // HTMLImageElement (original)
+let canvasScale = 1;          // display scale (for fitting window)
+let currentRotation = 0;     // 0, 90, 180, 270
+let currentFlipH = false;
+let currentFlipV = false;
+let scaledWidth = 0;
+let scaledHeight = 0;
+let aspectMode = 'free';      // crop aspect ratio mode
+let splitMode = null;        // null or number (2-6)
+let cropOverlay = null;       // {x, y, w, h} in image pixels
+let isDraggingCrop = false;
+let dragStart = {x:0, y:0};
+let cropRect = {x:0, y:0, w:0, h:0};
+
+// ═══════════════════════════════════════════════════════════
+// DOM refs
+// ═══════════════════════════════════════════════════════════
+const mainCanvas  = document.getElementById('mainCanvas');
+const gridOverlay = document.getElementById('gridOverlay');
+const ctx        = mainCanvas.getContext('2d');
+const gCtx       = gridOverlay.getContext('2d');
+const canvasWrap = document.getElementById('canvasWrap');
+const dropZone   = document.getElementById('dropZone');
+const canvasArea = document.getElementById('canvasArea');
+const canvasInfo = document.getElementById('canvasInfo');
+const infoSize   = document.getElementById('infoSize');
+const infoZoom   = document.getElementById('infoZoom');
+const statusText = document.getElementById('statusText');
+const fileInput  = document.getElementById('fileInput');
+const btnOpen    = document.getElementById('btnOpen');
+const btnDropReset = document.getElementById('btnDropReset');
+const btnDownload = document.getElementById('btnDownload');
+const btnReset   = document.getElementById('btnReset');
+const btnCrop    = document.getElementById('btnCrop');
+const btnSplit   = document.getElementById('btnSplit');
+const btnFitScreen = document.getElementById('btnFitScreen');
+const btnApplyScale = document.getElementById('btnApplyScale');
+const scaleW    = document.getElementById('scaleW');
+const scaleH    = document.getElementById('scaleH');
+const valW      = document.getElementById('valW');
+const valH      = document.getElementById('valH');
+const lockRatio = document.getElementById('lockRatio');
+
+// ═══════════════════════════════════════════════════════════
+// Fit canvas to window
+// ═══════════════════════════════════════════════════════════
+function fitToWindow() {
+  if (!originalImage) return;
+  const availW = canvasArea.clientWidth  - 40;
+  const availH = canvasArea.clientHeight - 40;
+  const iw = originalImage.naturalWidth;
+  const ih = originalImage.naturalHeight;
+  let sw = iw, sh = ih;
+
+  // apply current rotation
+  if (currentRotation === 90 || currentRotation === 270) [sw, sh] = [sh, sw];
+
+  const scaleX = availW / sw;
+  const scaleY = availH / sh;
+  canvasScale = Math.min(scaleX, scaleY, 1);
+
+  mainCanvas.width  = Math.round(sw * canvasScale);
+  mainCanvas.height = Math.round(sh * canvasScale);
+  gridOverlay.width = mainCanvas.width;
+  gridOverlay.height = mainCanvas.height;
+
+  scaledWidth  = Math.round(sw * canvasScale);
+  scaledHeight = Math.round(sh * canvasScale);
+
+  // update range sliders
+  scaleW.max = iw * 4;
+  scaleH.max = ih * 4;
+  scaleW.value = Math.round(iw * canvasScale);
+  scaleH.value = Math.round(ih * canvasScale);
+  valW.textContent = scaleW.value + 'px';
+  valH.textContent = scaleH.value + 'px';
+
+  updateCropSliders();
+  render();
+}
+
+// ═══════════════════════════════════════════════════════════
+// Render main canvas
+// ═══════════════════════════════════════════════════════════
+function render() {
+  if (!originalImage) return;
+  const iw = originalImage.naturalWidth;
+  const ih = originalImage.naturalHeight;
+
+  // effective dims after rotation
+  let ew = iw, eh = ih;
+  if (currentRotation === 90 || currentRotation === 270) [ew, eh] = [eh, ew];
+
+  mainCanvas.width  = Math.round(ew * canvasScale);
+  mainCanvas.height = Math.round(eh * canvasScale);
+  gridOverlay.width = mainCanvas.width;
+  gridOverlay.height = mainCanvas.height;
+
+  ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
+  ctx.save();
+  ctx.translate(mainCanvas.width / 2, mainCanvas.height / 2);
+  ctx.rotate((currentRotation * Math.PI) / 180);
+  if (currentFlipH) ctx.scale(-1, 1);
+  if (currentFlipV) ctx.scale(1, -1);
+  const drawW = iw * canvasScale;
+  const drawH = ih * canvasScale;
+  ctx.drawImage(originalImage, -drawW / 2, -drawH / 2, drawW, drawH);
+  ctx.restore();
+
+  drawGridOverlay();
+  updateInfo();
+}
+
+function updateInfo() {
+  if (!originalImage) return;
+  const iw = originalImage.naturalWidth;
+  const ih = originalImage.naturalHeight;
+  let ew = iw, eh = ih;
+  if (currentRotation === 90 || currentRotation === 270) [ew, eh] = [eh, ew];
+  const zoom = Math.round(canvasScale * 100);
+  infoSize.textContent = `${ew} × ${eh}`;
+  infoZoom.textContent = `缩放: ${zoom}%`;
+  canvasInfo.style.display = 'block';
+}
+
+// ═══════════════════════════════════════════════════════════
+// Grid overlay (split preview / crop guide)
+// ═══════════════════════════════════════════════════════════
+function drawGridOverlay() {
+  gCtx.clearRect(0, 0, gridOverlay.width, gridOverlay.height);
+
+  if (splitMode) {
+    drawSplitGrid(splitMode);
+  } else if (aspectMode !== 'free') {
+    drawCropOverlay();
+  }
+}
+
+function drawSplitGrid(n) {
+  const w = gridOverlay.width;
+  const h = gridOverlay.height;
+  gCtx.strokeStyle = 'rgba(108,138,255,0.8)';
+  gCtx.lineWidth = 1;
+  const cw = w / n, ch = h / n;
+  for (let i = 1; i < n; i++) {
+    gCtx.beginPath(); gCtx.moveTo(i * cw, 0); gCtx.lineTo(i * cw, h); gCtx.stroke();
+    gCtx.beginPath(); gCtx.moveTo(0, i * ch); gCtx.lineTo(w, i * ch); gCtx.stroke();
+  }
+  // index labels
+  gCtx.fillStyle = 'rgba(108,138,255,0.9)';
+  gCtx.font = 'bold 12px Inter,sans-serif';
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const idx = r * n + c + 1;
+      const tw = gCtx.measureText(idx).width;
+      gCtx.fillText(idx, (c + 0.5) * cw - tw / 2, (r + 0.5) * ch + 4);
+    }
+  }
+}
+
+function drawCropOverlay() {
+  const r = cropRect;
+  if (r.w <= 0 || r.h <= 0) return;
+  gCtx.clearRect(0, 0, gridOverlay.width, gridOverlay.height);
+  // dim outside
+  gCtx.fillStyle = 'rgba(0,0,0,0.55)';
+  gCtx.fillRect(0, 0, gridOverlay.width, gridOverlay.height);
+  // clear crop area
+  gCtx.clearRect(r.x, r.y, r.w, r.h);
+  // border
+  gCtx.strokeStyle = '#6c8aff';
+  gCtx.lineWidth = 2;
+  gCtx.strokeRect(r.x, r.y, r.w, r.h);
+  // rule of thirds
+  gCtx.strokeStyle = 'rgba(108,138,255,0.5)';
+  gCtx.lineWidth = 1;
+  for (let t = 1; t < 3; t++) {
+    gCtx.beginPath(); gCtx.moveTo(r.x + r.w * t / 3, r.y); gCtx.lineTo(r.x + r.w * t / 3, r.y + r.h); gCtx.stroke();
+    gCtx.beginPath(); gCtx.moveTo(r.x, r.y + r.h * t / 3); gCtx.lineTo(r.x + r.w, r.y + r.h * t / 3); gCtx.stroke();
+  }
+  // size label
+  const iw = originalImage.naturalWidth;
+  const ih = originalImage.naturalHeight;
+  let ew = iw, eh = ih;
+  if (currentRotation === 90 || currentRotation === 270) [ew, eh] = [eh, ew];
+  const px = Math.round(r.w / canvasScale);
+  const py = Math.round(r.h / canvasScale);
+  gCtx.fillStyle = 'rgba(0,0,0,0.7)';
+  gCtx.fillRect(r.x + 4, r.y + r.h - 22, 90, 18);
+  gCtx.fillStyle = '#fff';
+  gCtx.font = '11px Inter,sans-serif';
+  gCtx.fillText(`${px} × ${py}`, r.x + 8, r.y + r.h - 8);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Load image
+// ═══════════════════════════════════════════════════════════
+function loadImage(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      originalImage = img;
+      currentRotation = 0;
+      currentFlipH = false;
+      currentFlipV = false;
+      aspectMode = 'free';
+      splitMode = null;
+      cropRect = {x:0, y:0, w:0, h:0};
+      canvasWrap.style.display = 'block';
+      dropZone.classList.add('hidden');
+      btnDropReset.style.display = '';
+      btnCrop.disabled = false;
+      btnSplit.disabled = false;
+      scaleW.value = 0; scaleH.value = 0;
+      valW.textContent = '—'; valH.textContent = '—';
+      setStatus(`已加载: ${file.name} (${img.naturalWidth}×${img.naturalHeight})`);
+      fitToWindow();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function resetAll() {
+  originalImage = null;
+  currentRotation = 0;
+  currentFlipH = false;
+  currentFlipV = false;
+  aspectMode = 'free';
+  splitMode = null;
+  cropRect = {x:0, y:0, w:0, h:0};
+  canvasWrap.style.display = 'none';
+  dropZone.classList.remove('hidden');
+  btnDropReset.style.display = 'none';
+  btnCrop.disabled = true;
+  btnSplit.disabled = true;
+  canvasInfo.style.display = 'none';
+  scaleW.value = 0; scaleH.value = 0;
+  valW.textContent = '—'; valH.textContent = '—';
+  setStatus('已重置');
+}
+
+// ═══════════════════════════════════════════════════════════
+// Get effective image dimensions
+// ═══════════════════════════════════════════════════════════
+function effectiveDims() {
+  if (!originalImage) return {w:0, h:0};
+  let w = originalImage.naturalWidth;
+  let h = originalImage.naturalHeight;
+  if (currentRotation === 90 || currentRotation === 270) [w, h] = [h, w];
+  return {w, h};
+}
+
+// ═══════════════════════════════════════════════════════════
+// Crop helpers
+// ═══════════════════════════════════════════════════════════
+function updateCropSliders() {
+  if (!originalImage) return;
+  const {w, h} = effectiveDims();
+  cropRect = {x: 0, y: 0, w: mainCanvas.width, h: mainCanvas.height};
+  if (aspectMode !== 'free') {
+    const [rw, rh] = aspectMode.split(':').map(Number);
+    const targetRatio = rw / rh;
+    const canvasRatio = mainCanvas.width / mainCanvas.height;
+    if (canvasRatio > targetRatio) {
+      cropRect.h = mainCanvas.height;
+      cropRect.w = Math.round(cropRect.h * targetRatio);
+      cropRect.x = Math.round((mainCanvas.width - cropRect.w) / 2);
+    } else {
+      cropRect.w = mainCanvas.width;
+      cropRect.h = Math.round(cropRect.w / targetRatio);
+      cropRect.y = Math.round((mainCanvas.height - cropRect.h) / 2);
+    }
+  }
+  drawGridOverlay();
+}
+
+function getAspectRatio() {
+  if (aspectMode === 'free') return null;
+  const [rw, rh] = aspectMode.split(':').map(Number);
+  return rw / rh;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Unified render: draw original with current transforms to a given canvas
+// ═══════════════════════════════════════════════════════════
+function renderToCanvas(targetCanvas, targetW, targetH) {
+  const iw = originalImage.naturalWidth;
+  const ih = originalImage.naturalHeight;
+  targetCanvas.width  = targetW;
+  targetCanvas.height = targetH;
+  const tCtx = targetCanvas.getContext('2d');
+  tCtx.clearRect(0, 0, targetW, targetH);
+  tCtx.save();
+  tCtx.translate(targetW / 2, targetH / 2);
+  tCtx.rotate((currentRotation * Math.PI) / 180);
+  if (currentFlipH) tCtx.scale(-1, 1);
+  if (currentFlipV) tCtx.scale(1, -1);
+  const scale = targetW / (iw * canvasScale);
+  tCtx.drawImage(originalImage, -iw/2 * scale, -ih/2 * scale, iw * scale, ih * scale);
+  tCtx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+// Crop apply
+// ═══════════════════════════════════════════════════════════
+function applyCrop() {
+  if (!originalImage) return;
+  if (cropRect.w < 2 || cropRect.h < 2) { setStatus('请先在图片上拖动画出裁切框，或选择宽高比后点击应用'); return; }
+  const sx = Math.max(0, cropRect.x);
+  const sy = Math.max(0, cropRect.y);
+  const sw = Math.min(cropRect.w, mainCanvas.width  - sx);
+  const sh = Math.min(cropRect.h, mainCanvas.height - sy);
+  if (sw <= 2 || sh <= 2) { setStatus('裁切区域无效'); return; }
+  setStatus(`正在裁切...`);
+  requestAnimationFrame(() => {
+    // Render current display (with all transforms) to offscreen
+    const displayCanvas = document.createElement('canvas');
+    renderToCanvas(displayCanvas, mainCanvas.width, mainCanvas.height);
+    // Extract the crop region in display coords, scaled to image resolution
+    const finalW = Math.round(sw / canvasScale);
+    const finalH = Math.round(sh / canvasScale);
+    const final = document.createElement('canvas');
+    final.width  = finalW;
+    final.height = finalH;
+    const fCtx = final.getContext('2d');
+    fCtx.drawImage(displayCanvas, sx, sy, sw, sh, 0, 0, finalW, finalH);
+    const img = new Image();
+    img.onload = () => {
+      originalImage = img;
+      currentRotation = 0;
+      currentFlipH = false;
+      currentFlipV = false;
+      aspectMode = 'free';
+      splitMode = null;
+      setStatus(`裁切完成: ${finalW}×${finalH}`);
+      fitToWindow();
+    };
+    img.src = final.toDataURL('image/png');
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// Scale
+// ═══════════════════════════════════════════════════════════
+function applyScale(newW, newH) {
+  if (!originalImage) return;
+  setStatus(`正在缩放: ${newW}×${newH}...`);
+  requestAnimationFrame(() => {
+    // Render to new canvas with current transforms, then extract at new size
+    const displayW = mainCanvas.width;
+    const displayH = mainCanvas.height;
+    const offscreen = document.createElement('canvas');
+    renderToCanvas(offscreen, displayW, displayH);
+    const final = document.createElement('canvas');
+    final.width  = newW;
+    final.height = newH;
+    const fCtx = final.getContext('2d');
+    fCtx.drawImage(offscreen, 0, 0, displayW, displayH, 0, 0, newW, newH);
+    const img = new Image();
+    img.onload = () => {
+      originalImage = img;
+      currentRotation = 0;
+      currentFlipH = false;
+      currentFlipV = false;
+      aspectMode = 'free';
+      splitMode = null;
+      setStatus(`缩放完成: ${newW}×${newH}`);
+      fitToWindow();
+    };
+    img.src = final.toDataURL('image/png');
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// Grid split
+// ═══════════════════════════════════════════════════════════
+function applySplit(n) {
+  if (!originalImage) return;
+  // Render current display (with all transforms) to a canvas
+  const displayW = mainCanvas.width;
+  const displayH = mainCanvas.height;
+  const displayCanvas = document.createElement('canvas');
+  renderToCanvas(displayCanvas, displayW, displayH);
+  // Split the display canvas into n×n grid
+  const dw = Math.floor(displayW / n);
+  const dh = Math.floor(displayH / n);
+  // Compute scale from display pixels back to original image pixels
+  const scaleX = originalImage.naturalWidth  / (displayW / canvasScale);
+  const scaleY = originalImage.naturalHeight / (displayH / canvasScale);
+  const results = [];
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const sx = c * dw;
+      const sy = r * dh;
+      const partCanvas = document.createElement('canvas');
+      partCanvas.width  = Math.round(dw * scaleX);
+      partCanvas.height = Math.round(dh * scaleY);
+      const pCtx = partCanvas.getContext('2d');
+      // Scale the display region to original image resolution
+      pCtx.drawImage(displayCanvas, sx, sy, dw, dh, 0, 0, partCanvas.width, partCanvas.height);
+      results.push({
+        idx: r * n + c + 1,
+        dataUrl: partCanvas.toDataURL('image/png'),
+        w: partCanvas.width,
+        h: partCanvas.height
+      });
+    }
+  }
+  return results;
+}
+
+async function downloadSplit(n) {
+  const parts = applySplit(n);
+  setStatus(`正在导出 ${n}×${n} = ${parts.length} 张图片...`);
+  for (const p of parts) {
+    const a = document.createElement('a');
+    a.href = p.dataUrl;
+    a.download = `split_${n}x${n}_${String(p.idx).padStart(2,'0')}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    await new Promise(r => setTimeout(r, 200));
+  }
+  setStatus(`已导出 ${parts.length} 张分块图片`);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Download full processed image
+// ═══════════════════════════════════════════════════════════
+function downloadFull() {
+  if (!originalImage) return;
+  const offscreen = document.createElement('canvas');
+  renderToCanvas(offscreen, mainCanvas.width, mainCanvas.height);
+  const a = document.createElement('a');
+  a.href = offscreen.toDataURL('image/png');
+  a.download = 'processed.png';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setStatus('图片已下载');
+}
+
+// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// Status
+// ═══════════════════════════════════════════════════════════
+function setStatus(msg) {
+  statusText.textContent = msg;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Crop mouse interaction
+// ═══════════════════════════════════════════════════════════
+function canvasMouseDown(e) {
+  if (!originalImage || splitMode) return;
+  const rect = mainCanvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  isDraggingCrop = true;
+  dragStart = {x: mx, y: my};
+  if (aspectMode === 'free') {
+    cropRect = {x: mx, y: my, w: 0, h: 0};
+  } else {
+    updateCropSliders();
+  }
+}
+
+function canvasMouseMove(e) {
+  if (!isDraggingCrop || !originalImage || splitMode) return;
+  const rect = mainCanvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  if (aspectMode !== 'free') {
+    // drag to reposition crop
+    const ar = getAspectRatio();
+    const cx = mx - cropRect.w / 2;
+    const cy = my - cropRect.h / 2;
+    cropRect.x = Math.max(0, Math.min(mainCanvas.width  - cropRect.w, cx));
+    cropRect.y = Math.max(0, Math.min(mainCanvas.height - cropRect.h, cy));
+  } else {
+    // freeform drag
+    const x = Math.min(dragStart.x, mx);
+    const y = Math.min(dragStart.y, my);
+    const w = Math.abs(mx - dragStart.x);
+    const h = Math.abs(my - dragStart.y);
+    cropRect = {x, y, w, h};
+  }
+  drawGridOverlay();
+}
+
+function canvasMouseUp(e) {
+  if (!isDraggingCrop) return;
+  isDraggingCrop = false;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Event listeners
+// ═══════════════════════════════════════════════════════════
+btnOpen.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadImage(e.target.files[0]); });
+btnDropReset.addEventListener('click', resetAll);
+btnReset.addEventListener('click', () => {
+  if (!originalImage) return;
+  currentRotation = 0; currentFlipH = false; currentFlipV = false;
+  aspectMode = 'free'; splitMode = null; cropRect = {x:0,y:0,w:0,h:0};
+  document.querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.split-btn').forEach(b => b.classList.remove('active'));
+  fitToWindow();
+  setStatus('已重置变换');
+});
+
+btnDownload.addEventListener('click', downloadFull);
+
+// Rotate
+document.querySelectorAll('[data-rotate]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!originalImage) return;
+    currentRotation = (currentRotation + parseInt(btn.dataset.rotate) + 360) % 360;
+    fitToWindow();
+    setStatus(`旋转: ${currentRotation}°`);
+  });
+});
+
+// Flip
+document.querySelectorAll('[data-flip]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!originalImage) return;
+    if (btn.dataset.flip === 'h') currentFlipH = !currentFlipH;
+    else currentFlipV = !currentFlipV;
+    render();
+    setStatus(`翻转: H=${currentFlipH} V=${currentFlipV}`);
+  });
+});
+
+// Scale preset buttons
+document.querySelectorAll('[data-scale]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!originalImage) return;
+    const factor = parseFloat(btn.dataset.scale);
+    let {w, h} = effectiveDims();
+    applyScale(Math.round(w * factor), Math.round(h * factor));
+  });
+});
+
+// Fit screen
+btnFitScreen.addEventListener('click', () => { if (originalImage) fitToWindow(); });
+
+// Scale sliders
+scaleW.addEventListener('input', () => {
+  valW.textContent = scaleW.value + 'px';
+  if (lockRatio.checked && originalImage) {
+    const {w, h} = effectiveDims();
+    const ratio = h / w;
+    scaleH.value = Math.round(scaleW.value * ratio);
+    valH.textContent = scaleH.value + 'px';
+  }
+});
+scaleH.addEventListener('input', () => {
+  valH.textContent = scaleH.value + 'px';
+  if (lockRatio.checked && originalImage) {
+    const {w, h} = effectiveDims();
+    const ratio = w / h;
+    scaleW.value = Math.round(scaleH.value * ratio);
+    valW.textContent = scaleW.value + 'px';
+  }
+});
+btnApplyScale.addEventListener('click', () => {
+  if (!originalImage) return;
+  const newW = parseInt(scaleW.value);
+  const newH = parseInt(scaleH.value);
+  if (newW > 0 && newH > 0) applyScale(newW, newH);
+});
+
+// Aspect ratio buttons
+document.querySelectorAll('.aspect-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!originalImage) return;
+    document.querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    aspectMode = btn.dataset.aspect;
+    splitMode = null;
+    document.querySelectorAll('.split-btn').forEach(b => b.classList.remove('active'));
+    updateCropSliders();
+    setStatus(`裁切宽高比: ${aspectMode}`);
+  });
+});
+
+// Split buttons
+document.querySelectorAll('.split-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!originalImage) return;
+    document.querySelectorAll('.split-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    splitMode = parseInt(btn.dataset.split);
+    aspectMode = 'free';
+    document.querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
+    drawGridOverlay();
+    setStatus(`网格分割: ${splitMode}×${splitMode}`);
+  });
+});
+
+btnCrop.addEventListener('click', () => {
+  if (!originalImage) return;
+  if (cropRect.w < 10 || cropRect.h < 10) {
+    setStatus('请先在图片上拖动画出裁切区域');
+    return;
+  }
+  applyCrop();
+});
+
+btnSplit.addEventListener('click', () => {
+  if (!originalImage || !splitMode) return;
+  downloadSplit(splitMode);
+});
+
+// Canvas mouse events (crop)
+mainCanvas.addEventListener('mousedown', canvasMouseDown);
+mainCanvas.addEventListener('mousemove', canvasMouseMove);
+mainCanvas.addEventListener('mouseup', canvasMouseUp);
+mainCanvas.addEventListener('mouseleave', canvasMouseUp);
+
+// Drag and drop
+canvasArea.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+canvasArea.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file) loadImage(file);
+});
+
+// Window resize
+window.addEventListener('resize', () => { if (originalImage) fitToWindow(); });
+</script>
+</body>
+</html>
