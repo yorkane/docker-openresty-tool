@@ -146,9 +146,9 @@ local function is_image(filename)
     return IMAGE_EXTS[get_ext(filename)] == true
 end
 
--- Check if extension is .jiff (our processed format)
-local function is_jiff(filename)
-    return get_ext(filename) == "jiff"
+-- Check if extension is .jfif (our processed format)
+local function is_jfif(filename)
+    return get_ext(filename) == "jfif"
 end
 
 -- Validate directory name (Windows-compatible)
