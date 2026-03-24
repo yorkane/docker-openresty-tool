@@ -250,6 +250,13 @@ end
 -- Core image processing pipeline
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Safely close a vips.Image if it has a close method
+local function safe_close(img)
+    if img and type(img.close) == "function" then
+        pcall(img.close, img)
+    end
+end
+
 -- Params:
 --   img        — vips.Image object (already loaded)
 --   params     — table with w, h, fit, crop, fmt, q
@@ -259,6 +266,7 @@ end
 function _M.process_pipeline(img, params, src_ext, opts)
     opts = opts or {}
     local ok, err
+    local prev_img = nil  -- previous img to close before assigning a new one
 
     -- Crop first if requested
     if params.crop then
@@ -269,7 +277,11 @@ function _M.process_pipeline(img, params, src_ext, opts)
             ch = math.min(ch, img:height() - cy)
             if cw > 0 and ch > 0 then
                 ok, err = pcall(function() return img:crop(cx, cy, cw, ch) end)
-                if ok then img = err end
+                if ok then
+                    safe_close(prev_img)
+                    prev_img = img
+                    img = err
+                end
             end
         end
     end
@@ -286,26 +298,42 @@ function _M.process_pipeline(img, params, src_ext, opts)
             ok, err = pcall(function()
                 return img:resize(tw / src_w, {vscale = th / src_h})
             end)
-            if ok then img = err end
+            if ok then
+                safe_close(prev_img)
+                prev_img = img
+                img = err
+            end
 
         elseif fit == "cover" then
             local tw    = params.w or src_w
             local th    = params.h or src_h
             local scale = math.max(tw / src_w, th / src_h)
             ok, err = pcall(function() return img:resize(scale) end)
-            if ok then img = err end
+            if ok then
+                safe_close(prev_img)
+                prev_img = img
+                img = err
+            end
             local cx2 = math.floor((img:width()  - tw) / 2)
             local cy2 = math.floor((img:height() - th) / 2)
             if cx2 >= 0 and cy2 >= 0 then
                 ok, err = pcall(function() return img:crop(cx2, cy2, tw, th) end)
-                if ok then img = err end
+                if ok then
+                    safe_close(prev_img)
+                    prev_img = img
+                    img = err
+                end
             end
 
         elseif fit == "scale" then
             if params.w then
                 local scale = params.w / src_w
                 ok, err = pcall(function() return img:resize(scale) end)
-                if ok then img = err end
+                if ok then
+                    safe_close(prev_img)
+                    prev_img = img
+                    img = err
+                end
             end
 
         else  -- contain (default)
@@ -314,14 +342,25 @@ function _M.process_pipeline(img, params, src_ext, opts)
             local scale = math.min(tw / src_w, th / src_h)
             if scale ~= 1.0 then
                 ok, err = pcall(function() return img:resize(scale) end)
-                if ok then img = err end
+                if ok then
+                    safe_close(prev_img)
+                    prev_img = img
+                    img = err
+                end
             end
         end
     end
 
-    -- Encode
+    -- Encode — img is the final processed image
     local save_suffix, content_type = _M.build_save_suffix(params.fmt, params.q, src_ext, opts)
+    local out_width = img:width()
+    local out_height = img:height()
     ok, err = pcall(function() return img:write_to_buffer(save_suffix) end)
+
+    -- Close the final image; prev_img (intermediate) was already closed above each time
+    safe_close(prev_img)
+    safe_close(img)
+
     if not ok or not err then
         return false, "encode failed: " .. tostring(err)
     end
@@ -329,8 +368,8 @@ function _M.process_pipeline(img, params, src_ext, opts)
     return true, {
         buf = err,
         content_type = content_type,
-        width = img:width(),
-        height = img:height(),
+        width = out_width,
+        height = out_height,
     }
 end
 
