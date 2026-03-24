@@ -503,6 +503,41 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <div class="gz-hint">填写远端 OpenResty 服务根地址，目录整理在本机执行，图片转换转发到远端 /api/img</div>
     </div>
 
+    <!-- Image conversion params -->
+    <div>
+      <div class="gz-label">图片转换参数（可选）</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+        <div>
+          <div class="gz-label" style="margin-top:0">宽度</div>
+          <input class="gz-input" id="gz-w" type="number" min="1" placeholder="2560">
+        </div>
+        <div>
+          <div class="gz-label" style="margin-top:0">高度</div>
+          <input class="gz-input" id="gz-h" type="number" min="1" placeholder="2560">
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <select class="gz-input" id="gz-fit" style="height:auto;padding:6px">
+          <option value="">保持默认 (contain)</option>
+          <option value="contain">contain (包含)</option>
+          <option value="cover">cover (覆盖)</option>
+          <option value="fill">fill (填充)</option>
+          <option value="crop">crop (裁剪)</option>
+        </select>
+      </div>
+      <div style="margin-top:8px">
+        <div class="gz-label" style="margin-top:0">质量 (1-100)</div>
+        <input class="gz-input" id="gz-q" type="number" min="1" max="100" placeholder="90">
+      </div>
+    </div>
+
+    <!-- Concurrency (only for remote) -->
+    <div class="gz-remote-section" id="gz-concurrency-section">
+      <div class="gz-label">并发请求数</div>
+      <input class="gz-input" id="gz-concurrency" type="number" min="1" max="64" value="12">
+      <div class="gz-hint">A 服务器同时向 B 服务器发送的最大并发数（默认 12）</div>
+    </div>
+
     <!-- Progress bar (shown during processing) -->
     <div class="gz-progress" id="gz-progress">
       <div class="gz-progress-text" id="gz-progress-text">正在处理…</div>
@@ -765,15 +800,29 @@ const Gallerize = {
   // ── localStorage keys ──────────────────────────────
   LS_MODE: 'or-gallery-gz-mode',   // 'local' | 'remote'
   LS_REMOTE: 'or-gallery-gz-remote', // remote base URL
+  LS_W: 'or-gallery-gz-w',         // image width
+  LS_H: 'or-gallery-gz-h',         // image height
+  LS_FIT: 'or-gallery-gz-fit',     // fit mode
+  LS_Q: 'or-gallery-gz-q',         // quality
+  LS_CONCURRENCY: 'or-gallery-gz-concurrency', // concurrency count
 
   _mode: 'local',      // current selected mode
   _remoteUrl: '',      // remote base URL
+  _imgParams: { w: null, h: null, fit: null, q: null }, // image conversion params
+  _concurrency: 12,    // remote concurrency (default 12)
   _running: false,
 
   init() {
     // Restore persisted settings
     this._mode      = localStorage.getItem(this.LS_MODE) || 'local';
-    this.    _remoteUrl = localStorage.getItem(this.LS_REMOTE) || '';
+    this._remoteUrl = localStorage.getItem(this.LS_REMOTE) || '';
+    this._imgParams = {
+      w: localStorage.getItem(this.LS_W),
+      h: localStorage.getItem(this.LS_H),
+      fit: localStorage.getItem(this.LS_FIT),
+      q: localStorage.getItem(this.LS_Q),
+    };
+    this._concurrency = parseInt(localStorage.getItem(this.LS_CONCURRENCY) || '12', 10);
 
     // Wire reader toolbar button (button is now in reader-view toolbar)
     document.getElementById('rbtn-gallerize').addEventListener('click', () => this.open());
@@ -800,6 +849,22 @@ const Gallerize = {
       localStorage.setItem(this.LS_REMOTE, this._remoteUrl);
     });
 
+    // Image params inputs — persist on change
+    ['w','h','fit','q'].forEach(key => {
+      const el = document.getElementById('gz-' + key);
+      el.addEventListener('input', e => {
+        const val = e.target.value.trim();
+        this._imgParams[key] = val ? val : null;
+        localStorage.setItem(this['LS_' + key.toUpperCase()], val || '');
+      });
+    });
+
+    // Concurrency input — persist on change
+    document.getElementById('gz-concurrency').addEventListener('input', e => {
+      this._concurrency = parseInt(e.target.value, 10) || 12;
+      localStorage.setItem(this.LS_CONCURRENCY, String(this._concurrency));
+    });
+
     // Run button
     document.getElementById('gz-run').addEventListener('click', () => this.run());
   },
@@ -823,6 +888,13 @@ const Gallerize = {
     this._syncModeUI();
     document.getElementById('gz-remote-url').value = this._remoteUrl;
 
+    // Restore image params
+    document.getElementById('gz-w').value = this._imgParams.w || '';
+    document.getElementById('gz-h').value = this._imgParams.h || '';
+    document.getElementById('gz-fit').value = this._imgParams.fit || '';
+    document.getElementById('gz-q').value = this._imgParams.q || '';
+    document.getElementById('gz-concurrency').value = String(this._concurrency);
+
     // Reset progress & result
     this._setRunning(false);
     document.getElementById('gz-progress').classList.remove('show');
@@ -842,7 +914,9 @@ const Gallerize = {
     document.querySelectorAll('.gz-mode-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === this._mode);
     });
-    document.getElementById('gz-remote-section').classList.toggle('show', this._mode === 'remote');
+    const isRemote = this._mode === 'remote';
+    document.getElementById('gz-remote-section').classList.toggle('show', isRemote);
+    document.getElementById('gz-concurrency-section').classList.toggle('show', isRemote);
   },
 
   _setRunning(v) {
@@ -931,7 +1005,13 @@ const Gallerize = {
     if (this._mode === 'remote') {
       const base = this._remoteUrl.replace(/\/+$/, '');
       bodyObj.remote_url = base + '/api/img';
+      bodyObj.concurrency = this._concurrency;
     }
+    // Append image conversion params if specified
+    if (this._imgParams.w) bodyObj.w = parseInt(this._imgParams.w, 10);
+    if (this._imgParams.h) bodyObj.h = parseInt(this._imgParams.h, 10);
+    if (this._imgParams.fit) bodyObj.fit = this._imgParams.fit;
+    if (this._imgParams.q) bodyObj.q = parseInt(this._imgParams.q, 10);
 
     const res = await fetch('/api/gallerize', {
       method: 'POST',

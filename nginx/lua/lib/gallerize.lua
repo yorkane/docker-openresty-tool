@@ -29,6 +29,7 @@ local _M = {}
 local ffi = require("ffi")
 local imgproc = require("lib.imgproc")
 local stat_ffi = require("lib.stat_ffi")
+local ngx = ngx
 
 local C = ffi.C
 local DT_DIR = 4
@@ -708,56 +709,104 @@ local function generate_covers(root_path, results)
     return results
 end
 
--- Step 7: Convert all images in a directory
-local function convert_images_in_dir(dir_path, params, stats, remote_opts)
+-- Step 7: Convert all images in a directory (with optional concurrency)
+local function convert_images_in_dir(dir_path, params, stats, remote_opts, concurrency)
     stats = stats or {processed = 0, skipped = 0, errors = {}}
     local entries = list_dir(dir_path)
     if not entries then return stats end
 
+    -- Collect image tasks first
+    local tasks = {}
     for _, e in ipairs(entries) do
         if not e.is_dir then
             local ext = get_ext(e.name)
             if is_image(e.name) and not is_jiff(e.name) and e.name ~= COVER_FILENAME then
                 local dst_name = e.name:gsub("%.[^./]+$", "") .. "." .. DEFAULT_OUT_EXT
                 local dst_path = dir_path .. "/" .. dst_name
-
-                local ok, result
-                if remote_opts then
-                    ok, result = remote_process_image(e.path, dst_path, params, remote_opts)
-                else
-                    ok, result = process_image(e.path, dst_path, params)
-                end
-
-                if ok then
-                    if result and result.skipped then
-                        stats.skipped = stats.skipped + 1
-                    else
-                        stats.processed = stats.processed + 1
-                        -- Remove original after successful conversion
-                        C.unlink(e.path)
-                    end
-                else
-                    table.insert(stats.errors, {file = e.name, error = result})
-                end
+                table.insert(tasks, {
+                    src = e.path,
+                    dst = dst_path,
+                    name = e.name,
+                    ext = ext,
+                })
             end
         end
     end
+
+    -- Sequential mode (no concurrency or local processing)
+    if not remote_opts or concurrency <= 1 then
+        for _, task in ipairs(tasks) do
+            local ok, result
+            if remote_opts then
+                ok, result = remote_process_image(task.src, task.dst, params, remote_opts)
+            else
+                ok, result = process_image(task.src, task.dst, params)
+            end
+
+            if ok then
+                if result and result.skipped then
+                    stats.skipped = stats.skipped + 1
+                else
+                    stats.processed = stats.processed + 1
+                    C.unlink(task.src)
+                end
+            else
+                table.insert(stats.errors, {file = task.name, error = result})
+            end
+        end
+        return stats
+    end
+
+    -- Concurrent mode (remote with concurrency > 1)
+    local sema = ngx semaphore.new(concurrency)
+    local threads = {}
+
+    -- Spawn a thread for each task
+    for i, task in ipairs(tasks) do
+        threads[i] = ngx.thread.spawn(function()
+            sema:wait(0)  -- Wait for available slot
+            local ok, result = remote_process_image(task.src, task.dst, params, remote_opts)
+            sema:post(1)    -- Release slot when done
+            return ok, result, i
+        end)
+    end
+
+    -- Wait for all threads and collect results
+    for i, thread in ipairs(threads) do
+        local thread_ok, ok, result, task_idx = thread:wait()
+        if thread_ok then
+            local task = tasks[task_idx]
+            if ok then
+                if result and result.skipped then
+                    stats.skipped = stats.skipped + 1
+                else
+                    stats.processed = stats.processed + 1
+                    C.unlink(task.src)
+                end
+            else
+                table.insert(stats.errors, {file = task.name, error = result})
+            end
+        else
+            table.insert(stats.errors, {error = "thread spawn/wait failed"})
+        end
+    end
+
     return stats
 end
 
 -- Convert images in root and all first-level subdirectories
-local function convert_all_images(root_path, params, stats, remote_opts)
+local function convert_all_images(root_path, params, stats, remote_opts, concurrency)
     stats = stats or {processed = 0, skipped = 0, errors = {}}
 
     -- Convert images in root
-    convert_images_in_dir(root_path, params, stats, remote_opts)
+    convert_images_in_dir(root_path, params, stats, remote_opts, concurrency)
 
     -- Convert images in each first-level subdirectory
     local entries = list_dir(root_path)
     if entries then
         for _, e in ipairs(entries) do
             if e.is_dir then
-                convert_images_in_dir(e.path, params, stats, remote_opts)
+                convert_images_in_dir(e.path, params, stats, remote_opts, concurrency)
             end
         end
     end
@@ -813,6 +862,7 @@ function _M.handle(webdav_root)
     local h = tonumber(body:match('"h"%s*:%s*(%d+)')) or DEFAULT_HEIGHT
     local fit = body:match('"fit"%s*:%s*"([^"]+)"') or DEFAULT_FIT
     local q = tonumber(body:match('"q"%s*:%s*(%d+)')) or DEFAULT_Q
+    local concurrency = tonumber(body:match('"concurrency"%s*:%s*(%d+)')) or 12
 
     -- Validate required fields
     if not path then
@@ -948,7 +998,7 @@ function _M.handle(webdav_root)
             fmt = DEFAULT_FMT,
             q = q,
         }
-        local stats = convert_all_images(abs_path, img_params, nil, remote_opts)
+        local stats = convert_all_images(abs_path, img_params, nil, remote_opts, concurrency)
         result.steps.convert = stats
 
         return send_json(200, success_response(result))
