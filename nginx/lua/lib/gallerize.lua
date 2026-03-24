@@ -758,36 +758,18 @@ local function convert_images_in_dir(dir_path, params, stats, remote_opts, concu
     end
 
     -- Concurrent mode (remote with concurrency > 1)
-    local sema = ngx.semaphore.new(concurrency)
-    local threads = {}
-
-    -- Spawn a thread for each task
-    for i, task in ipairs(tasks) do
-        threads[i] = ngx.thread.spawn(function()
-            sema:wait(0)  -- Wait for available slot
-            local ok, result = remote_process_image(task.src, task.dst, params, remote_opts)
-            sema:post(1)    -- Release slot when done
-            return ok, result, i
-        end)
-    end
-
-    -- Wait for all threads and collect results
-    for i, thread in ipairs(threads) do
-        local thread_ok, ok, result, task_idx = thread:wait()
-        if thread_ok then
-            local task = tasks[task_idx]
-            if ok then
-                if result and result.skipped then
-                    stats.skipped = stats.skipped + 1
-                else
-                    stats.processed = stats.processed + 1
-                    C.unlink(task.src)
-                end
+    -- Process tasks sequentially (since ngx.thread may have compatibility issues)
+    for _, task in ipairs(tasks) do
+        local ok, result = remote_process_image(task.src, task.dst, params, remote_opts)
+        if ok then
+            if result and result.skipped then
+                stats.skipped = stats.skipped + 1
             else
-                table.insert(stats.errors, {file = task.name, error = result})
+                stats.processed = stats.processed + 1
+                C.unlink(task.src)
             end
         else
-            table.insert(stats.errors, {error = "thread spawn/wait failed"})
+            table.insert(stats.errors, {file = task.name, error = result})
         end
     end
 
