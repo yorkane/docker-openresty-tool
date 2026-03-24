@@ -975,7 +975,8 @@ const Gallerize = {
       // flatten step
       const flatStep = steps.flatten;
       if (flatStep && flatStep.dirs !== undefined) {
-        parts.push(`<span>扁平化目录 <strong>${flatStep.dirs}</strong> 个</span>`);
+        const dirCount = Array.isArray(flatStep.dirs) ? flatStep.dirs.length : flatStep.dirs;
+        parts.push(`<span>扁平化目录 <strong>${dirCount}</strong> 个</span>`);
       }
 
       // promote step

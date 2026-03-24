@@ -314,12 +314,23 @@ end
 -- Remote image conversion helpers
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- Parse http://host:port/path → host, port, path
+-- Parse http(s)://host[:port]/path → scheme, host, port, path
 local function parse_url(url)
-    local host, port, path = url:match("^https?://([^:/]+):(%d+)(/.*)$")
-    if host then return host, tonumber(port), path end
-    host, path = url:match("^https?://([^/]+)(/.*)$")
-    if host then return host, 80, path end
+    -- With explicit port
+    local scheme, host, port, path = url:match("^(https?)://([^:/]+):(%d+)(/.*)$")
+    if scheme then return scheme, host, tonumber(port), path end
+    -- Without explicit port
+    scheme, host, path = url:match("^(https?)://([^/]+)(/.*)$")
+    if scheme then
+        local default_port = (scheme == "https") and 443 or 80
+        return scheme, host, default_port, path
+    end
+    -- No path at all (e.g. https://host.com)
+    scheme, host = url:match("^(https?)://([^/]+)$")
+    if scheme then
+        local default_port = (scheme == "https") and 443 or 80
+        return scheme, host, default_port, "/"
+    end
     return nil
 end
 
@@ -335,7 +346,7 @@ local function build_query(params)
 end
 
 -- Send one image to remote /api/img via HTTP/1.1, return response body or nil, err
-local function remote_send_one(host, port, path_base, query, body, mime)
+local function remote_send_one(host, port, path_base, query, body, mime, use_ssl)
     local connect_ms = 5000
     local send_ms    = 60000
     local recv_ms    = 120000
@@ -345,11 +356,23 @@ local function remote_send_one(host, port, path_base, query, body, mime)
     local ok, err = sock:connect(host, port)
     if not ok then return nil, "connect failed: " .. tostring(err) end
 
+    -- SSL handshake for HTTPS
+    if use_ssl then
+        local session, ssl_err = sock:sslhandshake(nil, host, false)
+        if not session then
+            sock:close()
+            return nil, "ssl handshake failed: " .. tostring(ssl_err)
+        end
+    end
+
     sock:settimeout(send_ms)
     local req_path = query ~= "" and (path_base .. "?" .. query) or path_base
+    -- Host header: omit default port (80 for http, 443 for https) per RFC 7230
+    local default_port = use_ssl and 443 or 80
+    local host_header = (port == default_port) and host or (host .. ":" .. tostring(port))
     local req = table.concat({
         "POST " .. req_path .. " HTTP/1.1\r\n",
-        "Host: " .. host .. ":" .. tostring(port) .. "\r\n",
+        "Host: " .. host_header .. "\r\n",
         "Content-Type: " .. (mime or "application/octet-stream") .. "\r\n",
         "Content-Length: " .. #body .. "\r\n",
         "Connection: keep-alive\r\n",
@@ -418,7 +441,7 @@ local function remote_process_image(src_path, dst_path, params, remote_opts)
 
     local out, err = remote_send_one(
         remote_opts.host, remote_opts.port, remote_opts.path,
-        query, body, mime
+        query, body, mime, remote_opts.use_ssl
     )
     if not out then return false, err end
 
@@ -843,12 +866,12 @@ function _M.handle(webdav_root)
     -- Parse remote_url if provided (used for image conversion only)
     local remote_opts = nil
     if remote_url and remote_url ~= "" then
-        local rhost, rport, rpath = parse_url(remote_url)
+        local rscheme, rhost, rport, rpath = parse_url(remote_url)
         if not rhost then
             return send_json(400, err_response("bad_request", "invalid remote_url: " .. remote_url))
         end
-        remote_opts = { host = rhost, port = rport, path = rpath }
-        ngx.log(ngx.ERR, "GALLERIZE: remote mode, converting via " .. rhost .. ":" .. rport .. rpath)
+        remote_opts = { host = rhost, port = rport, path = rpath, use_ssl = (rscheme == "https") }
+        ngx.log(ngx.ERR, "GALLERIZE: remote mode, converting via " .. rscheme .. "://" .. rhost .. ":" .. rport .. rpath)
     end
 
     -- ─────────────────────────────────────────────────────────────────────────
