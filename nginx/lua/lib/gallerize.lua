@@ -29,6 +29,7 @@ local _M = {}
 local ffi = require("ffi")
 local imgproc = require("lib.imgproc")
 local stat_ffi = require("lib.stat_ffi")
+local semaphore = require("ngx.semaphore")
 local ngx = ngx
 
 local C = ffi.C
@@ -758,10 +759,27 @@ local function convert_images_in_dir(dir_path, params, stats, remote_opts, concu
     end
 
     -- Concurrent mode (remote with concurrency > 1)
-    -- Process tasks sequentially (since ngx.thread may have compatibility issues)
-    for _, task in ipairs(tasks) do
-        local ok, result = remote_process_image(task.src, task.dst, params, remote_opts)
-        if ok then
+    -- Use semaphore to limit concurrent requests
+    local sema = semaphore.new(concurrency)
+    local threads = {}
+
+    -- Spawn threads with semaphore limiting
+    for i, task in ipairs(tasks) do
+        threads[i] = ngx.thread.spawn(function()
+            sema:wait(0)  -- Wait for available slot (non-blocking)
+            local ok, result = remote_process_image(task.src, task.dst, params, remote_opts)
+            sema:post(1)  -- Release slot
+            return ok, result, i  -- Return task index as 3rd value
+        end)
+    end
+
+    -- Wait for all threads and collect results
+    -- ngx.thread.wait returns: wait_ok, thread_ret1, thread_ret2, ...
+    -- For our spawn: wait_ok, proc_ok, result, task_idx
+    for i, thread in ipairs(threads) do
+        local wait_ok, proc_ok, result = ngx.thread.wait(thread)
+        local task = tasks[i]
+        if wait_ok and proc_ok then
             if result and result.skipped then
                 stats.skipped = stats.skipped + 1
             else
@@ -769,7 +787,7 @@ local function convert_images_in_dir(dir_path, params, stats, remote_opts, concu
                 C.unlink(task.src)
             end
         else
-            table.insert(stats.errors, {file = task.name, error = result})
+            table.insert(stats.errors, {file = task.name, error = result or proc_ok})
         end
     end
 
