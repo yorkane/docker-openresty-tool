@@ -56,7 +56,7 @@ local MAX_DIR_NAME_LEN = 38
 
 -- Image extensions (for identifying image files)
 local IMAGE_EXTS = {
-    jpg = true, jpeg = true, png = true, webp = true,
+    jpg = true, jpeg = true, jfif = true, png = true, webp = true,
     gif = true, bmp = true, tiff = true, tif = true,
     avif = true, heic = true, heif = true,
 }
