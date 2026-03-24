@@ -720,7 +720,7 @@ local function convert_images_in_dir(dir_path, params, stats, remote_opts, concu
     for _, e in ipairs(entries) do
         if not e.is_dir then
             local ext = get_ext(e.name)
-            if is_image(e.name) and not is_jiff(e.name) and e.name ~= COVER_FILENAME then
+            if is_image(e.name) and not is_jfif(e.name) and e.name ~= COVER_FILENAME then
                 local dst_name = e.name:gsub("%.[^./]+$", "") .. "." .. DEFAULT_OUT_EXT
                 local dst_path = dir_path .. "/" .. dst_name
                 table.insert(tasks, {
