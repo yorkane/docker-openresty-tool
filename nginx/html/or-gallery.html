@@ -804,8 +804,19 @@ const Gallerize = {
     document.getElementById('gz-run').addEventListener('click', () => this.run());
   },
 
+  // Resolve the directory to gallerize: always the directory Reader is currently browsing.
+  // Reader._path is the opened dir/zip path; if it's a zip, use its parent dir.
+  _readerDir() {
+    const p = Reader._path || GalleryView._path || '/';
+    if (Reader._isZip) {
+      // Strip the zip filename to get its parent directory
+      return p.replace(/\/[^/]+$/, '') || '/';
+    }
+    return p;
+  },
+
   open() {
-    const path = GalleryView._path || '/';
+    const path = this._readerDir();
     document.getElementById('gz-path-display').textContent = path;
 
     // Restore UI state
@@ -862,7 +873,7 @@ const Gallerize = {
   },
 
   async run() {
-    const path = GalleryView._path || '/';
+    const path = this._readerDir();
 
     // Validate remote URL if needed
     if (this._mode === 'remote') {
