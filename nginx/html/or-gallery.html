@@ -2218,7 +2218,7 @@ const Reader = {
     const item = this._images[this._idx];
     if (!item) return;
     const src = encodeURIComponent(item.url);
-    window.open(`/img-editor.html?src=${src}`, '_blank');
+    window.open(`/img-editor?src=${src}`, '_blank');
   },
 
   openInSequence() {
@@ -2226,7 +2226,7 @@ const Reader = {
     // Encode all image URLs as base64 JSON for the sequence editor
     const urls = this._images.map(img => img.url);
     const encoded = btoa(encodeURIComponent(JSON.stringify(urls)));
-    window.open(`/img-sequence.html?gallery=${encoded}`, '_blank');
+    window.open(`/img-sequence?gallery=${encoded}`, '_blank');
   },
 
   _syncButtons() {
