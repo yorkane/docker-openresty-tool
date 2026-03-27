@@ -572,6 +572,17 @@ function loadToCanvas(url) {
   });
 }
 
+// Canvas to blob with JPEG quality 0.9 (only affects JPEG; PNG/GIF/WebP are lossless)
+function canvasToBlob(canvas, mimeType) {
+  return new Promise(resolve => {
+    if (mimeType === 'image/jpeg') {
+      canvas.toBlob(resolve, 'image/jpeg', 0.9);
+    } else {
+      canvas.toBlob(resolve, mimeType);
+    }
+  });
+}
+
 // ═══════════════════════════════════════════════════════════
 // Export helpers
 // ═══════════════════════════════════════════════════════════
@@ -589,13 +600,13 @@ async function getExportBlob(item) {
     }
     // Fallback: load from thumb URL
     const { canvas } = await loadToCanvas(item.thumb);
-    return new Promise(r => canvas.toBlob(r, item.mimeType));
+    return canvasToBlob(canvas, item.mimeType);
   }
 
-  // Rotation required: draw to canvas with transform, export as requested MIME
+  // Rotation required: draw to canvas with transform, export with JPEG quality 0.9
   const { canvas: raw } = await loadToCanvas(item.thumb);
   const rotCanvas = rotatedCanvas(raw, raw.width, raw.height, rot);
-  return new Promise(r => rotCanvas.toBlob(r, item.mimeType));
+  return canvasToBlob(rotCanvas, item.mimeType);
 }
 
 // ═══════════════════════════════════════════════════════════
