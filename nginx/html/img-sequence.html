@@ -319,9 +319,11 @@ let nextId = 0;
 let draggedId = null;
 let fmtSelectEl = document.getElementById('fmtSelect');
 
-const MIME_MAP = { jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
-                   png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', tiff: 'image/tiff' };
-const KNOWN_EXTS = ['jpg','jpeg','webp','png','gif','bmp','tiff'];
+const MIME_MAP = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', jfif: 'image/jpeg', jiff: 'image/jpeg',
+  webp: 'image/webp', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', tiff: 'image/tiff'
+};
+const KNOWN_EXTS = ['jpg','jpeg','jfif','jiff','webp','png','gif','bmp','tiff'];
 
 function extFromName(name) {
   return (name.split('.').pop() || '').toLowerCase();
@@ -330,8 +332,10 @@ function mimeFromName(name) {
   return MIME_MAP[extFromName(name)] || 'image/png';
 }
 function extFromMime(mime) {
-  const map = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
-                'image/gif': 'gif', 'image/bmp': 'bmp', 'image/tiff': 'tiff' };
+  const map = {
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+    'image/gif': 'gif', 'image/bmp': 'bmp', 'image/tiff': 'tiff'
+  };
   return map[mime] || 'png';
 }
 
@@ -670,7 +674,9 @@ async function exportZip(fmt) {
   for (let i = 0; i < images.length; i++) {
     const item = images[i];
     const blob = await getExportBlob(item);
-    const safeExt = KNOWN_EXTS.includes(extFromName(item.name)) ? extFromName(item.name) : extFromMime(item.mimeType);
+    const safeExt = KNOWN_EXTS.includes(extFromName(item.name))
+      ? extFromName(item.name)           // trust original file extension when known
+      : extFromMime(item.mimeType);      // fall back to MIME-derived extension
     const baseName = item.name.replace(/\.[^.]+$/, '');
     folder.file(`${String(i+1).padStart(3,'0')}_${baseName}.${safeExt}`, blob);
     setProgress((i + 1) / images.length * 100, `处理第 ${i+1} / ${images.length} 张...`);
