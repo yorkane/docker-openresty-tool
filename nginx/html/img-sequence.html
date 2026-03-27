@@ -68,11 +68,7 @@
     white-space: nowrap;
   }
   .btn:hover { background: var(--border); }
-  .btn.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.primary:hover { background: #5a7aee; }
   .btn.danger { border-color: var(--danger); color: var(--danger); background: transparent; }
   .btn.danger:hover { background: rgba(255,107,107,0.12); }
@@ -215,7 +211,7 @@
     color: var(--text2);
     white-space: nowrap;
     overflow: hidden;
-    text-overpression: ellipsis;
+    text-overflow: ellipsis;
     max-width: 100%;
     display: block;
   }
@@ -243,17 +239,6 @@
   }
   .img-card .card-actions .btn:hover { background: var(--border); color: var(--text); }
   .img-card .card-actions .btn.del:hover { background: rgba(255,107,107,0.2); color: var(--danger); border-color: var(--danger); }
-
-  /* Drop indicator line */
-  .drop-indicator {
-    width: 4px;
-    background: var(--accent);
-    border-radius: 2px;
-    flex-shrink: 0;
-    align-self: stretch;
-    display: none;
-  }
-  .drop-indicator.active { display: block; }
 
   /* Footer */
   footer {
@@ -326,11 +311,29 @@
 <script>
 // ═══════════════════════════════════════════════════════════
 // State
+// images[]: { id, file (File|null), url (blob URL string), origUrl (original URL string),
+//             name, mimeType, w, h, rotation (0|90|180|270), thumb (blob URL) }
 // ═══════════════════════════════════════════════════════════
-let images = [];  // [{ id, file, name, mimeType, w, h, rotation (0|90|180|270), thumb (dataURL) }]
+let images = [];
 let nextId = 0;
 let draggedId = null;
 let fmtSelectEl = document.getElementById('fmtSelect');
+
+const MIME_MAP = { jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+                   png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', tiff: 'image/tiff' };
+const KNOWN_EXTS = ['jpg','jpeg','webp','png','gif','bmp','tiff'];
+
+function extFromName(name) {
+  return (name.split('.').pop() || '').toLowerCase();
+}
+function mimeFromName(name) {
+  return MIME_MAP[extFromName(name)] || 'image/png';
+}
+function extFromMime(mime) {
+  const map = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+                'image/gif': 'gif', 'image/bmp': 'bmp', 'image/tiff': 'tiff' };
+  return map[mime] || 'png';
+}
 
 // ═══════════════════════════════════════════════════════════
 // DOM refs
@@ -347,7 +350,17 @@ const progressText = document.getElementById('progressText');
 const progressFill = document.querySelector('#progressFill span');
 
 // ═══════════════════════════════════════════════════════════
-// Render
+// Blob URL helpers — create / revoke
+// ═══════════════════════════════════════════════════════════
+function createBlobUrl(blob) {
+  return URL.createObjectURL(blob);
+}
+function revokeUrl(url) {
+  if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Render — only touches DOM for the grid container itself
 // ═══════════════════════════════════════════════════════════
 function render() {
   if (images.length === 0) {
@@ -366,16 +379,17 @@ function render() {
 
   imageGrid.innerHTML = '';
   images.forEach((img, idx) => {
+    const rot = img.rotation || 0;
+    const rotClass = rot !== 0 ? ' visible' : '';
+    const rotLabel = rot === 0 ? '' : `🔄 ${rot}°`;
+
     const card = document.createElement('div');
     card.className = 'img-card';
     card.dataset.id = img.id;
     card.draggable = true;
     card.title = img.name;
 
-    const rot = img.rotation || 0;
-    const rotClass = rot !== 0 ? ' visible' : '';
-    const rotLabel = rot === 0 ? '' : `🔄 ${rot}°`;
-
+    // Use thumb blob URL for display; apply CSS rotation
     card.innerHTML = `
       <div class="thumb-wrap">
         <img src="${img.thumb}" style="transform:rotate(${rot}deg)" draggable="false">
@@ -386,45 +400,50 @@ function render() {
         <span class="card-name" title="${img.name}">${img.name}</span>
         <span class="card-dims">${img.w} × ${img.h}</span>
         <div class="card-actions">
-          <button class="btn rot-cw" data-id="${img.id}" title="顺时针旋转90°">🔄</button>
+          <button class="btn rot-cw"  data-id="${img.id}" title="顺时针旋转90°">🔄</button>
           <button class="btn rot-ccw" data-id="${img.id}" title="逆时针旋转90°">↶</button>
-          <button class="btn del" data-id="${img.id}" title="移除">✕</button>
+          <button class="btn del"     data-id="${img.id}" title="移除">✕</button>
         </div>
       </div>
     `;
-
     imageGrid.appendChild(card);
   });
 }
 
 // ═══════════════════════════════════════════════════════════
-// Add images
+// Add images from File list
+// Strategy: create blob URL directly — zero re-encoding
 // ═══════════════════════════════════════════════════════════
 function addImages(files) {
   const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
   if (!arr.length) return;
-  let pending = arr.length;
+
+  // Create blob URLs for all files in parallel, then add to state
   arr.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const img = new Image();
-      img.onload = () => {
-        images.push({
-          id: nextId++,
-          file,
-          name: file.name,
-          mimeType: file.type || 'image/png',
-          thumb: e.target.result,
-          w: img.naturalWidth,
-          h: img.naturalHeight,
-          rotation: 0
-        });
-        pending--;
-        if (pending === 0) render();
-      };
-      img.src = e.target.result;
+    const mimeType = file.type || mimeFromName(file.name);
+    const blobUrl = createBlobUrl(file);
+
+    // Create an Image to read natural dimensions (sync via onload)
+    const img = new Image();
+    img.onload = () => {
+      images.push({
+        id: nextId++,
+        file,
+        url: blobUrl,
+        origUrl: null,        // no original URL for local files
+        name: file.name,
+        mimeType,
+        w: img.naturalWidth,
+        h: img.naturalHeight,
+        rotation: 0,
+        thumb: blobUrl        // use original blob as thumbnail — zero cost
+      });
+      render();
     };
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      revokeUrl(blobUrl);
+    };
+    img.src = blobUrl;
   });
 }
 
@@ -439,11 +458,20 @@ function rotateById(id, delta) {
 }
 
 function removeById(id) {
+  const item = images.find(i => i.id === id);
+  if (!item) return;
+  // Only revoke if thumb is a blob URL we created (not same as url)
+  if (item.thumb && item.thumb.startsWith('blob:') && item.thumb !== item.url) {
+    revokeUrl(item.thumb);
+  }
   images = images.filter(i => i.id !== id);
   render();
 }
 
 function clearAll() {
+  images.forEach(item => {
+    if (item.thumb && item.thumb.startsWith('blob:')) revokeUrl(item.thumb);
+  });
   images = [];
   render();
 }
@@ -457,7 +485,7 @@ imageGrid.addEventListener('dragstart', e => {
   draggedId = parseInt(card.dataset.id);
   card.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', draggedId); // required for Firefox
+  e.dataTransfer.setData('text/plain', draggedId);
   e.stopPropagation();
 });
 
@@ -481,11 +509,8 @@ imageGrid.addEventListener('dragover', e => {
 imageGrid.addEventListener('dragleave', e => {
   const card = e.target.closest('.img-card');
   if (!card) return;
-  // Only remove if actually leaving the card (not entering a child)
   const related = e.relatedTarget;
-  if (!related || !card.contains(related)) {
-    card.classList.remove('drag-over');
-  }
+  if (!related || !card.contains(related)) card.classList.remove('drag-over');
 });
 
 imageGrid.addEventListener('drop', e => {
@@ -504,36 +529,18 @@ imageGrid.addEventListener('drop', e => {
   render();
 });
 
-// Button events — delegation on imageGrid
 imageGrid.addEventListener('click', e => {
   const btn = e.target.closest('[data-id]');
   if (!btn) return;
   const id = parseInt(btn.dataset.id);
-  if (btn.classList.contains('rot-cw')) rotateById(id, 90);
+  if      (btn.classList.contains('rot-cw')) rotateById(id, 90);
   else if (btn.classList.contains('rot-ccw')) rotateById(id, -90);
-  else if (btn.classList.contains('del')) removeById(id);
+  else if (btn.classList.contains('del'))     removeById(id);
 });
 
 // ═══════════════════════════════════════════════════════════
 // Canvas helpers
 // ═══════════════════════════════════════════════════════════
-function loadImageToCanvas(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const c = document.createElement('canvas');
-      c.width  = img.naturalWidth;
-      c.height = img.naturalHeight;
-      const ctx = c.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      resolve({ canvas: c, w: img.naturalWidth, h: img.naturalHeight });
-    };
-    img.onerror = reject;
-    img.src = src;
-  });
-}
-
 function rotatedCanvas(c, w, h, rotation) {
   rotation = ((rotation || 0) % 360 + 360) % 360;
   if (rotation === 0) return c;
@@ -549,13 +556,46 @@ function rotatedCanvas(c, w, h, rotation) {
   return nc;
 }
 
+// Load image from blob URL into canvas
+function loadToCanvas(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      resolve({ canvas: c, w: img.naturalWidth, h: img.naturalHeight });
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
 // ═══════════════════════════════════════════════════════════
-// Render item to final canvas (with rotation applied)
+// Export helpers
 // ═══════════════════════════════════════════════════════════
-async function renderItem(item) {
-  const { canvas: c, w, h } = await loadImageToCanvas(item.thumb);
-  const rotated = rotatedCanvas(c, w, h, item.rotation || 0);
-  return rotated;
+async function getExportBlob(item) {
+  const rot = item.rotation || 0;
+  if (rot === 0) {
+    // No rotation: use original file/blob directly — preserves original format
+    if (item.file) {
+      return item.file;
+    }
+    if (item.origUrl) {
+      const resp = await fetch(item.origUrl);
+      if (!resp.ok) throw new Error('fetch failed: ' + item.origUrl);
+      return resp.blob();
+    }
+    // Fallback: load from thumb URL
+    const { canvas } = await loadToCanvas(item.thumb);
+    return new Promise(r => canvas.toBlob(r, item.mimeType));
+  }
+
+  // Rotation required: draw to canvas with transform, export as requested MIME
+  const { canvas: raw } = await loadToCanvas(item.thumb);
+  const rotCanvas = rotatedCanvas(raw, raw.width, raw.height, rot);
+  return new Promise(r => rotCanvas.toBlob(r, item.mimeType));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -565,7 +605,6 @@ async function exportAll() {
   if (!images.length) return;
   const fmt = fmtSelectEl.value;
   setProgress(0, `正在准备 ${images.length} 张图片...`);
-
   try {
     if (fmt === 'pdf') {
       await exportPDF();
@@ -581,31 +620,35 @@ async function exportAll() {
 
 async function exportPDF() {
   const { jsPDF } = window.jspdf;
+  const firstBlob = await getExportBlob(images[0]);
+  const firstUrl  = createBlobURL(firstBlob);
+  const firstImg  = await loadImage(firstUrl);
+  URL.revokeObjectURL(firstUrl);
 
-  // First image determines page size & orientation
-  const firstRotated = await renderItem(images[0]);
-  const isLandscape = firstRotated.width > firstRotated.height;
+  const isLandscape = firstImg.naturalWidth > firstImg.naturalHeight;
   const pdf = new jsPDF({
     orientation: isLandscape ? 'landscape' : 'portrait',
     unit: 'px',
-    format: [firstRotated.width, firstRotated.height]
+    format: [firstImg.naturalWidth, firstImg.naturalHeight]
   });
 
   for (let i = 0; i < images.length; i++) {
     const item = images[i];
-    const canvas = await renderItem(item);
-    const imgData = canvas.toDataURL('image/png');
+    const blob = await getExportBlob(item);
+    const url  = createBlobURL(blob);
+    const img  = await loadImage(url);
+    URL.revokeObjectURL(url);
+
     if (i > 0) {
-      const isL = canvas.width > canvas.height;
-      pdf.addPage([canvas.width, canvas.height], isL ? 'landscape' : 'portrait');
+      const isL = img.naturalWidth > img.naturalHeight;
+      pdf.addPage([img.naturalWidth, img.naturalHeight], isL ? 'landscape' : 'portrait');
     }
-    pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+    pdf.addImage(img.src, 'PNG', 0, 0, img.naturalWidth, img.naturalHeight);
     setProgress((i + 1) / images.length * 100, `处理第 ${i+1} / ${images.length} 张...`);
   }
 
   hideProgress();
-  const blob = pdf.output('blob');
-  downloadBlob(blob, `sequence_${dateStamp()}.pdf`);
+  downloadBlob(pdf.output('blob'), `sequence_${dateStamp()}.pdf`);
 }
 
 async function exportZip(fmt) {
@@ -615,24 +658,26 @@ async function exportZip(fmt) {
 
   for (let i = 0; i < images.length; i++) {
     const item = images[i];
-    const canvas = await renderItem(item);
-    // Use original MIME type, fall back to PNG
-    const mimeType = item.mimeType || 'image/png';
-    const blob = await new Promise(r => canvas.toBlob(r, mimeType));
-    const pad = String(i + 1).padStart(3, '0');
-    // Keep original file extension, swap only if unknown
-    const origExt = item.name.split('.').pop().toLowerCase();
-    const knownExts = ['jpg','jpeg','png','webp','gif','bmp'];
-    const safeExt = knownExts.includes(origExt) ? origExt : 'png';
+    const blob = await getExportBlob(item);
+    const safeExt = KNOWN_EXTS.includes(extFromName(item.name)) ? extFromName(item.name) : extFromMime(item.mimeType);
     const baseName = item.name.replace(/\.[^.]+$/, '');
-    folder.file(`${pad}_${baseName}.${safeExt}`, blob);
+    folder.file(`${String(i+1).padStart(3,'0')}_${baseName}.${safeExt}`, blob);
     setProgress((i + 1) / images.length * 100, `处理第 ${i+1} / ${images.length} 张...`);
   }
 
   hideProgress();
-  const zBlob = await zip.generateAsync({ type: 'blob' });
-  downloadBlob(zBlob, `sequence_${dateStamp()}.${ext}`);
+  downloadBlob(await zip.generateAsync({ type: 'blob' }), `sequence_${dateStamp()}.${ext}`);
 }
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+function createBlobURL(blob) { return URL.createObjectURL(blob); }
 
 function setProgress(pct, text) {
   progressBar.classList.add('active');
@@ -643,9 +688,7 @@ function hideProgress() {
   progressBar.classList.remove('active');
   progressFill.style.width = '0%';
 }
-function dateStamp() {
-  return new Date().toISOString().slice(0, 10);
-}
+function dateStamp() { return new Date().toISOString().slice(0, 10); }
 function downloadBlob(blob, filename) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -665,20 +708,16 @@ fileInput.addEventListener('change', e => {
 btnExport.addEventListener('click', exportAll);
 btnClearAll.addEventListener('click', clearAll);
 
-// Global drag & drop (add more files)
-mainArea.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+mainArea.addEventListener('dragover',  e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
 mainArea.addEventListener('drop', e => {
   e.preventDefault();
   const files = e.dataTransfer.files;
   if (files.length) addImages(files);
 });
-
-// Empty state click to add
 emptyState.addEventListener('click', () => fileInput.click());
 
 // ═══════════════════════════════════════════════════════════
-// Load images from gallery URL parameter (?gallery=<base64>)
-// Called when opened from reader with a gallery of images
+// Gallery import — fetch each URL as original blob
 // ═══════════════════════════════════════════════════════════
 async function loadFromGalleryParam() {
   const params = new URLSearchParams(window.location.search);
@@ -688,59 +727,49 @@ async function loadFromGalleryParam() {
     const urls = JSON.parse(decodeURIComponent(atob(gallery)));
     if (!Array.isArray(urls) || urls.length === 0) return;
     setProgress(0, `正在加载 ${urls.length} 张图片...`);
-    let loaded = 0;
     for (const url of urls) {
+      const name = url.split('?')[0].split('/').pop() || 'image';
+      const mime = mimeFromName(name);
       try {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-          img.src = url;
-        });
-        // Draw to canvas to get dimensions
-        const c = document.createElement('canvas');
-        c.width = img.naturalWidth;
-        c.height = img.naturalHeight;
-        const ctx = c.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        const thumb = c.toDataURL('image/png');
-        const name = (url.split('?')[0]).split('/').pop() || 'image';
-        // Infer MIME type from URL path extension
-        const ext = name.split('.').pop().toLowerCase();
-        const mimeFromExt = { jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', tiff: 'image/tiff' };
-        const mimeType = mimeFromExt[ext] || 'image/png';
+        const resp = await fetch(url, { cache: 'no-store' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const blob = await resp.blob();
+        const blobUrl = createBlobURL(blob);
+
+        // Get dimensions from blob URL
+        const img = await loadImage(blobUrl);
         images.push({
           id: nextId++,
           file: null,
+          url: blobUrl,
+          origUrl: url,
           name,
-          mimeType,
-          thumb,
+          mimeType: mime,
           w: img.naturalWidth,
           h: img.naturalHeight,
-          rotation: 0
+          rotation: 0,
+          thumb: blobUrl
         });
-        loaded++;
-        setProgress(loaded / urls.length * 100, `加载第 ${loaded} / ${urls.length} 张...`);
+        setProgress(images.length / urls.length * 100,
+          `加载第 ${images.length} / ${urls.length} 张...`);
       } catch(e) {
-        console.warn('Failed to load image:', url, e);
+        console.warn('Failed to load:', url, e);
       }
     }
     hideProgress();
     render();
     if (images.length > 0) {
-      document.getElementById('footerCount').textContent = `${images.length} 张图片（已从 Gallery 导入）`;
+      document.getElementById('footerCount').textContent =
+        `${images.length} 张图片（已从 Gallery 导入）`;
     }
   } catch(e) {
     console.error('Failed to parse gallery param:', e);
+    hideProgress();
   }
 }
 
-// Init: load from URL param then render
-(async () => {
-  await loadFromGalleryParam();
-  render();
-})();
+// Init
+(async () => { await loadFromGalleryParam(); render(); })();
 </script>
 </body>
 </html>
