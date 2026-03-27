@@ -327,7 +327,7 @@
 // ═══════════════════════════════════════════════════════════
 // State
 // ═══════════════════════════════════════════════════════════
-let images = [];  // [{ id, file, name, thumb (dataURL), w, h, rotation (0|90|180|270) }]
+let images = [];  // [{ id, file, name, mimeType, w, h, rotation (0|90|180|270), thumb (dataURL) }]
 let nextId = 0;
 let draggedId = null;
 let fmtSelectEl = document.getElementById('fmtSelect');
@@ -378,7 +378,7 @@ function render() {
 
     card.innerHTML = `
       <div class="thumb-wrap">
-        <img src="${img.thumb}" style="transform:rotate(${rot}deg)">
+        <img src="${img.thumb}" style="transform:rotate(${rot}deg)" draggable="false">
         <span class="card-index">${idx + 1}</span>
         <span class="rotate-tag${rotClass}">${rotLabel}</span>
       </div>
@@ -393,25 +393,7 @@ function render() {
       </div>
     `;
 
-    // Drag events
-    card.addEventListener('dragstart', onDragStart);
-    card.addEventListener('dragend', onDragEnd);
-    card.addEventListener('dragover', onDragOver);
-    card.addEventListener('drop', onDrop);
-    card.addEventListener('dragleave', onDragLeave);
-
     imageGrid.appendChild(card);
-  });
-
-  // Wire per-card buttons (event delegation)
-  imageGrid.querySelectorAll('.rot-cw').forEach(btn => {
-    btn.addEventListener('click', e => { e.stopPropagation(); rotateById(parseInt(btn.dataset.id), 90); });
-  });
-  imageGrid.querySelectorAll('.rot-ccw').forEach(btn => {
-    btn.addEventListener('click', e => { e.stopPropagation(); rotateById(parseInt(btn.dataset.id), -90); });
-  });
-  imageGrid.querySelectorAll('.btn.del').forEach(btn => {
-    btn.addEventListener('click', e => { e.stopPropagation(); removeById(parseInt(btn.dataset.id)); });
   });
 }
 
@@ -431,6 +413,7 @@ function addImages(files) {
           id: nextId++,
           file,
           name: file.name,
+          mimeType: file.type || 'image/png',
           thumb: e.target.result,
           w: img.naturalWidth,
           h: img.naturalHeight,
@@ -466,45 +449,70 @@ function clearAll() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Drag & Drop reorder
+// Drag & Drop reorder — event delegation on imageGrid
 // ═══════════════════════════════════════════════════════════
-function onDragStart(e) {
-  draggedId = parseInt(e.currentTarget.dataset.id);
-  e.currentTarget.classList.add('dragging');
+imageGrid.addEventListener('dragstart', e => {
+  const card = e.target.closest('.img-card');
+  if (!card) return;
+  draggedId = parseInt(card.dataset.id);
+  card.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move';
-}
+  e.dataTransfer.setData('text/plain', draggedId); // required for Firefox
+  e.stopPropagation();
+});
 
-function onDragEnd(e) {
-  e.currentTarget.classList.remove('dragging');
+imageGrid.addEventListener('dragend', e => {
+  const card = e.target.closest('.img-card');
+  if (card) card.classList.remove('dragging');
   document.querySelectorAll('.img-card').forEach(c => c.classList.remove('drag-over'));
   draggedId = null;
-}
+});
 
-function onDragOver(e) {
+imageGrid.addEventListener('dragover', e => {
+  const card = e.target.closest('.img-card');
+  if (!card || parseInt(card.dataset.id) === draggedId) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
-  const card = e.currentTarget;
-  if (parseInt(card.dataset.id) === draggedId) return;
   document.querySelectorAll('.img-card').forEach(c => c.classList.remove('drag-over'));
   card.classList.add('drag-over');
-}
+  e.stopPropagation();
+});
 
-function onDragLeave(e) {
-  e.currentTarget.classList.remove('drag-over');
-}
+imageGrid.addEventListener('dragleave', e => {
+  const card = e.target.closest('.img-card');
+  if (!card) return;
+  // Only remove if actually leaving the card (not entering a child)
+  const related = e.relatedTarget;
+  if (!related || !card.contains(related)) {
+    card.classList.remove('drag-over');
+  }
+});
 
-function onDrop(e) {
+imageGrid.addEventListener('drop', e => {
   e.preventDefault();
-  const targetId = parseInt(e.currentTarget.dataset.id);
-  e.currentTarget.classList.remove('drag-over');
+  const card = e.target.closest('.img-card');
+  if (!card) return;
+  card.classList.remove('drag-over');
+  const targetId = parseInt(card.dataset.id);
   if (!draggedId || targetId === draggedId) return;
   const fromIdx = images.findIndex(i => i.id === draggedId);
   const toIdx   = images.findIndex(i => i.id === targetId);
   if (fromIdx === -1 || toIdx === -1) return;
   const [moved] = images.splice(fromIdx, 1);
   images.splice(toIdx, 0, moved);
+  draggedId = null;
   render();
-}
+});
+
+// Button events — delegation on imageGrid
+imageGrid.addEventListener('click', e => {
+  const btn = e.target.closest('[data-id]');
+  if (!btn) return;
+  const id = parseInt(btn.dataset.id);
+  if (btn.classList.contains('rot-cw')) rotateById(id, 90);
+  else if (btn.classList.contains('rot-ccw')) rotateById(id, -90);
+  else if (btn.classList.contains('del')) removeById(id);
+});
 
 // ═══════════════════════════════════════════════════════════
 // Canvas helpers
@@ -608,10 +616,16 @@ async function exportZip(fmt) {
   for (let i = 0; i < images.length; i++) {
     const item = images[i];
     const canvas = await renderItem(item);
-    const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+    // Use original MIME type, fall back to PNG
+    const mimeType = item.mimeType || 'image/png';
+    const blob = await new Promise(r => canvas.toBlob(r, mimeType));
     const pad = String(i + 1).padStart(3, '0');
-    // CBZ convention: folder named with images inside, or flat with prefix
-    folder.file(`${pad}_${item.name.replace(/\.[^.]+$/, '.png')}`, blob);
+    // Keep original file extension, swap only if unknown
+    const origExt = item.name.split('.').pop().toLowerCase();
+    const knownExts = ['jpg','jpeg','png','webp','gif','bmp'];
+    const safeExt = knownExts.includes(origExt) ? origExt : 'png';
+    const baseName = item.name.replace(/\.[^.]+$/, '');
+    folder.file(`${pad}_${baseName}.${safeExt}`, blob);
     setProgress((i + 1) / images.length * 100, `处理第 ${i+1} / ${images.length} 张...`);
   }
 
@@ -691,11 +705,16 @@ async function loadFromGalleryParam() {
         const ctx = c.getContext('2d');
         ctx.drawImage(img, 0, 0);
         const thumb = c.toDataURL('image/png');
-        const name = url.split('/').pop() || 'image';
+        const name = (url.split('?')[0]).split('/').pop() || 'image';
+        // Infer MIME type from URL path extension
+        const ext = name.split('.').pop().toLowerCase();
+        const mimeFromExt = { jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', tiff: 'image/tiff' };
+        const mimeType = mimeFromExt[ext] || 'image/png';
         images.push({
           id: nextId++,
           file: null,
           name,
+          mimeType,
           thumb,
           w: img.naturalWidth,
           h: img.naturalHeight,

@@ -295,6 +295,12 @@
 <!-- Header -->
 <header>
   <h1>🖼️ 图片处理器</h1>
+  <div class="zoom-controls" style="display:flex;align-items:center;gap:4px;margin-left:12px">
+    <button class="btn sm" id="btnZoomOut" title="缩小 (滚轮下)">➖</button>
+    <span id="zoomLevel" style="font-size:12px;color:var(--accent);min-width:44px;text-align:center">100%</span>
+    <button class="btn sm" id="btnZoomIn" title="放大 (滚轮上)">➕</button>
+    <button class="btn sm" id="btnZoomFit" title="适应窗口">⊡ 适应</button>
+  </div>
   <div class="header-actions">
     <button class="btn primary" id="btnDownload">下载结果</button>
     <button class="btn" id="btnSave">💾 保存到服务器</button>
@@ -460,6 +466,8 @@
 // ═══════════════════════════════════════════════════════════
 let originalImage = null;     // HTMLImageElement (original)
 let canvasScale = 1;          // display scale (for fitting window)
+const MIN_ZOOM = 0.02;
+const MAX_ZOOM = 20;
 let currentRotation = 0;     // 0, 90, 180, 270
 let currentFlipH = false;
 let currentFlipV = false;
@@ -472,6 +480,7 @@ let isDraggingCrop = false;
 let dragStart = {x:0, y:0};
 let cropRect = {x:0, y:0, w:0, h:0};
 let pendingSrcUrl = null;    // image URL passed from reader
+let pendingFileName = null;  // original filename for save/download naming
 
 // ═══════════════════════════════════════════════════════════
 // DOM refs
@@ -540,6 +549,47 @@ function fitToWindow() {
 
   updateCropSliders();
   render();
+  updateZoomDisplay();
+}
+
+function setZoom(newScale, anchorX, anchorY) {
+  if (!originalImage) return;
+  const oldScale = canvasScale;
+  canvasScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newScale));
+
+  if (Math.abs(canvasScale - oldScale) < 0.0001) return;
+
+  // Adjust canvas pixel dimensions
+  const iw = originalImage.naturalWidth;
+  const ih = originalImage.naturalHeight;
+  let sw = iw, sh = ih;
+  if (currentRotation === 90 || currentRotation === 270) [sw, sh] = [sh, sw];
+
+  mainCanvas.width  = Math.round(sw * canvasScale);
+  mainCanvas.height = Math.round(sh * canvasScale);
+  gridOverlay.width = mainCanvas.width;
+  gridOverlay.height = mainCanvas.height;
+
+  scaledWidth  = mainCanvas.width;
+  scaledHeight = mainCanvas.height;
+
+  // Scale existing crop rect when zooming
+  if (cropRect.w > 0 || cropRect.h > 0) {
+    const sx = mainCanvas.width  / (sw * oldScale);
+    const sy = mainCanvas.height / (sh * oldScale);
+    cropRect.x *= sx;
+    cropRect.y *= sy;
+    cropRect.w *= sx;
+    cropRect.h *= sy;
+  }
+
+  render();
+  updateZoomDisplay();
+}
+
+function updateZoomDisplay() {
+  const zoomEl = document.getElementById('zoomLevel');
+  if (zoomEl) zoomEl.textContent = Math.round(canvasScale * 100) + '%';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -660,6 +710,8 @@ function drawCropOverlay() {
 // ═══════════════════════════════════════════════════════════
 function loadImage(file) {
   if (!file || !file.type.startsWith('image/')) return;
+  pendingFileName = file.name;
+  pendingSrcUrl = null;
   const reader = new FileReader();
   reader.onload = e => {
     const img = new Image();
@@ -694,6 +746,8 @@ function resetAll() {
   aspectMode = 'free';
   splitMode = null;
   cropRect = {x:0, y:0, w:0, h:0};
+  pendingSrcUrl = null;
+  pendingFileName = null;
   canvasWrap.style.display = 'none';
   dropZone.classList.remove('hidden');
   btnDropReset.style.display = 'none';
@@ -702,6 +756,7 @@ function resetAll() {
   canvasInfo.style.display = 'none';
   scaleW.value = 0; scaleH.value = 0;
   valW.textContent = '—'; valH.textContent = '—';
+  updateZoomDisplay();
   setStatus('已重置');
 }
 
@@ -939,18 +994,23 @@ function canvasMouseMove(e) {
 
   if (aspectMode !== 'free') {
     // drag to reposition crop
-    const ar = getAspectRatio();
     const cx = mx - cropRect.w / 2;
     const cy = my - cropRect.h / 2;
     cropRect.x = Math.max(0, Math.min(mainCanvas.width  - cropRect.w, cx));
     cropRect.y = Math.max(0, Math.min(mainCanvas.height - cropRect.h, cy));
   } else {
-    // freeform drag
-    const x = Math.min(dragStart.x, mx);
-    const y = Math.min(dragStart.y, my);
-    const w = Math.abs(mx - dragStart.x);
-    const h = Math.abs(my - dragStart.y);
-    cropRect = {x, y, w, h};
+    // freeform drag — clamp to canvas bounds
+    const rawX = Math.min(dragStart.x, mx);
+    const rawY = Math.min(dragStart.y, my);
+    const rawW = Math.abs(mx - dragStart.x);
+    const rawH = Math.abs(my - dragStart.y);
+    // Clamp ending rect within canvas
+    const endX = Math.max(dragStart.x, mx);
+    const endY = Math.max(dragStart.y, my);
+    cropRect.x = Math.max(0, Math.min(rawX, mainCanvas.width));
+    cropRect.y = Math.max(0, Math.min(rawY, mainCanvas.height));
+    cropRect.w = Math.max(0, Math.min(endX, mainCanvas.width)  - cropRect.x);
+    cropRect.h = Math.max(0, Math.min(endY, mainCanvas.height) - cropRect.y);
   }
   drawGridOverlay();
 }
@@ -1077,7 +1137,8 @@ btnCrop.addEventListener('click', () => {
 
 btnSplit.addEventListener('click', () => {
   if (!originalImage || !splitMode) return;
-  downloadSplit(splitMode);
+  // Export all split parts as a single ZIP
+  downloadZip();
 });
 
 // Canvas mouse events (crop)
@@ -1085,6 +1146,42 @@ mainCanvas.addEventListener('mousedown', canvasMouseDown);
 mainCanvas.addEventListener('mousemove', canvasMouseMove);
 mainCanvas.addEventListener('mouseup', canvasMouseUp);
 mainCanvas.addEventListener('mouseleave', canvasMouseUp);
+
+// Wheel zoom
+canvasArea.addEventListener('wheel', e => {
+  if (!originalImage) return;
+  e.preventDefault();
+  const rect = mainCanvas.getBoundingClientRect();
+  const anchorX = e.clientX - rect.left;
+  const anchorY = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.1 : 0.9;
+  // Convert anchor from display coords to image coords for precise zoom
+  const iw = originalImage.naturalWidth;
+  const ih = originalImage.naturalHeight;
+  let sw = iw, sh = ih;
+  if (currentRotation === 90 || currentRotation === 270) [sw, sh] = [sh, sw];
+  const axImg = anchorX / canvasScale;
+  const ayImg = anchorY / canvasScale;
+  setZoom(canvasScale * factor);
+  // Adjust scroll to keep anchor point stationary (rough)
+}, { passive: false });
+
+// Zoom controls
+document.getElementById('btnZoomIn').addEventListener('click', () => {
+  if (!originalImage) return;
+  setZoom(canvasScale * 1.25);
+  setStatus('缩放: ' + Math.round(canvasScale * 100) + '%');
+});
+document.getElementById('btnZoomOut').addEventListener('click', () => {
+  if (!originalImage) return;
+  setZoom(canvasScale * 0.8);
+  setStatus('缩放: ' + Math.round(canvasScale * 100) + '%');
+});
+document.getElementById('btnZoomFit').addEventListener('click', () => {
+  if (!originalImage) return;
+  fitToWindow();
+  setStatus('已适应窗口');
+});
 
 // Drag and drop
 canvasArea.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
@@ -1108,30 +1205,51 @@ window.addEventListener('resize', () => { if (originalImage) fitToWindow(); });
 // ═══════════════════════════════════════════════════════════
 function loadImageFromUrl(url) {
   pendingSrcUrl = url;
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = () => {
-    originalImage = img;
-    currentRotation = 0;
-    currentFlipH = false;
-    currentFlipV = false;
-    aspectMode = 'free';
-    splitMode = null;
-    cropRect = {x:0, y:0, w:0, h:0};
-    canvasWrap.style.display = 'block';
-    dropZone.classList.add('hidden');
-    btnDropReset.style.display = '';
-    btnCrop.disabled = false;
-    btnSplit.disabled = false;
-    scaleW.value = 0; scaleH.value = 0;
-    valW.textContent = '—'; valH.textContent = '—';
-    setStatus(`已加载: ${url.split('/').pop() || 'image'} (${img.naturalWidth}×${img.naturalHeight})`);
-    fitToWindow();
-  };
-  img.onerror = () => {
-    setStatus('加载图片失败: ' + url);
-  };
-  img.src = url;
+  pendingFileName = url.split('/').pop().split('?')[0] || 'image';
+  setStatus('正在加载图片...');
+  fetch(url, { cache: 'no-store' })
+    .then(resp => {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.blob();
+    })
+    .then(blob => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error('图片解码失败'));
+          img.src = e.target.result;
+        };
+        reader.onerror = () => reject(new Error('读取失败'));
+        reader.readAsDataURL(blob);
+      });
+    })
+    .then(img => {
+      originalImage = img;
+      currentRotation = 0;
+      currentFlipH = false;
+      currentFlipV = false;
+      aspectMode = 'free';
+      splitMode = null;
+      cropRect = {x:0, y:0, w:0, h:0};
+      canvasWrap.style.display = 'block';
+      dropZone.classList.add('hidden');
+      btnDropReset.style.display = '';
+      btnCrop.disabled = false;
+      btnSplit.disabled = false;
+      scaleW.value = 0; scaleH.value = 0;
+      valW.textContent = '—'; valH.textContent = '—';
+      // Derive display name from URL path, stripping any fragment
+      const urlPath = url.split('?')[0];
+      const displayName = urlPath.split('/').pop() || 'image';
+      setStatus(`已加载: ${displayName} (${img.naturalWidth}×${img.naturalHeight})`);
+      fitToWindow();
+    })
+    .catch(err => {
+      setStatus('加载图片失败: ' + err.message);
+      console.error('loadImageFromUrl error:', err);
+    });
 }
 
 // Check URL param on load
@@ -1155,9 +1273,10 @@ async function saveToServer() {
     const blob = await new Promise(resolve => offscreen.toBlob(resolve, 'image/png'));
     if (!blob) { setStatus('渲染失败'); return; }
 
-    // Generate filename
+    // Generate filename — strip fragment from URL path
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const base = originalImage.src.split('/').pop().replace(/\.[^.]+$/, '') || 'image';
+    const base = (pendingFileName || '').replace(/\.[^.]+$/, '') ||
+                 (pendingSrcUrl || '').split('/').pop().replace(/\.[^.]+$/, '') || 'image';
     const filename = `${ts}_${base}.png`;
     const remotePath = `/-=my-works/${filename}`;
 
@@ -1207,14 +1326,16 @@ async function downloadZip() {
   setStatus('正在打包...');
   try {
     const zip = new JSZip();
-    const base = originalImage.src.split('/').pop().replace(/\.[^.]+$/, '') || 'image';
+    // Derive base name: pendingFileName > URL path > fallback
+    const base = (pendingFileName || '').replace(/\.[^.]+$/, '') ||
+                 (pendingSrcUrl || '').split('/').pop().replace(/\.[^.]+$/, '') || 'image';
 
     if (splitMode) {
       // Add all split parts
       const parts = applySplit(splitMode);
       for (const p of parts) {
         const blob = await (await fetch(p.dataUrl)).blob();
-        zip.file(`split_${splitMode}x${splitMode}_${String(p.idx).padStart(2,'0')}.png`, blob);
+        zip.file(`split_${String(p.idx).padStart(3,'0')}_${p.w}x${p.h}.png`, blob);
       }
       setStatus(`添加 ${parts.length} 个分块到 ZIP`);
     } else {
@@ -1231,11 +1352,14 @@ async function downloadZip() {
 
     const a = document.createElement('a');
     a.href = URL.createObjectURL(zipBlob);
-    a.download = `img_editor_${new Date().toISOString().slice(0,10)}.zip`;
+    const zipName = splitMode
+      ? `${base}_${splitMode}x${splitMode}.zip`
+      : `${base}_processed.zip`;
+    a.download = zipName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setStatus('ZIP 已下载');
+    setStatus(splitMode ? `ZIP 已下载 (${splitMode}×${splitMode} 分块)` : 'ZIP 已下载');
   } catch(e) {
     setStatus('打包失败: ' + e.message);
   }
