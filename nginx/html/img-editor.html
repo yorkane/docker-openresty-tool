@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>图片处理器</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script>
+  // Set PDF.js worker
+  if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.js';
+  }
+</script>
 <style>
   :root {
     --bg: #0f1117;
@@ -288,6 +297,8 @@
   <h1>🖼️ 图片处理器</h1>
   <div class="header-actions">
     <button class="btn primary" id="btnDownload">下载结果</button>
+    <button class="btn" id="btnSave">💾 保存到服务器</button>
+    <button class="btn" id="btnZip">📦 打包下载 ZIP</button>
     <button class="btn" id="btnReset">重置</button>
   </div>
 </header>
@@ -392,6 +403,32 @@
       <button class="btn" id="btnSplit" disabled>📦 导出所有分块</button>
     </div>
 
+    <div class="divider"></div>
+
+    <!-- PDF Tools -->
+    <div class="panel">
+      <div class="panel-title">PDF 工具</div>
+      <button class="btn" id="btnLoadPdf">📄 打开 PDF</button>
+      <input type="file" class="file-input" id="pdfInput" accept="application/pdf,.pdf">
+      <div id="pdfPageNav" style="display:none;margin-top:8px">
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)">
+          <button class="btn sm" id="btnPdfPrev">◀</button>
+          <span id="pdfPageInfo" style="flex:1;text-align:center">1 / 1</span>
+          <button class="btn sm" id="btnPdfNext">▶</button>
+        </div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;text-align:center">
+          <span id="pdfTotalPages"></span>
+        </div>
+        <button class="btn" id="btnSavePdfPages" disabled style="margin-top:8px;width:100%">📄 保存所有页面到服务器</button>
+      </div>
+      <div class="divider" style="margin:8px 0"></div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">多张图片合并为 PDF</div>
+      <button class="btn" id="btnMultiImg">🖼️ 选择多张图片</button>
+      <input type="file" class="file-input" id="multiImgInput" accept="image/*" multiple>
+      <div id="multiImgCount" style="display:none;font-size:11px;color:var(--accent);margin-top:4px"></div>
+      <button class="btn" id="btnExportPdf" disabled>📑 导出为 PDF</button>
+    </div>
+
   </div>
 
   <!-- Canvas -->
@@ -403,7 +440,7 @@
     <div class="drop-zone" id="dropZone">
       <div class="drop-icon">🖼️</div>
       <p>拖放图片到这里，或点击「打开图片」</p>
-      <p style="font-size:12px;color:var(--text2)">支持 JPG / PNG / WebP / GIF / BMP / TIFF</p>
+      <p style="font-size:12px;color:var(--text2)">支持 JPG / PNG / WebP / GIF / BMP / TIFF / PDF</p>
     </div>
     <div class="canvas-info" id="canvasInfo" style="display:none">
       <span id="infoSize"></span> &nbsp;|&nbsp; <span id="infoZoom"></span>
@@ -434,6 +471,7 @@ let cropOverlay = null;       // {x, y, w, h} in image pixels
 let isDraggingCrop = false;
 let dragStart = {x:0, y:0};
 let cropRect = {x:0, y:0, w:0, h:0};
+let pendingSrcUrl = null;    // image URL passed from reader
 
 // ═══════════════════════════════════════════════════════════
 // DOM refs
@@ -453,6 +491,8 @@ const fileInput  = document.getElementById('fileInput');
 const btnOpen    = document.getElementById('btnOpen');
 const btnDropReset = document.getElementById('btnDropReset');
 const btnDownload = document.getElementById('btnDownload');
+const btnSave     = document.getElementById('btnSave');
+const btnZip      = document.getElementById('btnZip');
 const btnReset   = document.getElementById('btnReset');
 const btnCrop    = document.getElementById('btnCrop');
 const btnSplit   = document.getElementById('btnSplit');
@@ -1051,11 +1091,387 @@ canvasArea.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfe
 canvasArea.addEventListener('drop', e => {
   e.preventDefault();
   const file = e.dataTransfer.files[0];
-  if (file) loadImage(file);
+  if (!file) return;
+  if (file.type === 'application/pdf') {
+    loadPdf(file);
+  } else {
+    loadImage(file);
+  }
 });
 
 // Window resize
 window.addEventListener('resize', () => { if (originalImage) fitToWindow(); });
+
+// ═══════════════════════════════════════════════════════════
+// Load image from URL parameter (?src=...)
+// Called by parent reader page to pass current image
+// ═══════════════════════════════════════════════════════════
+function loadImageFromUrl(url) {
+  pendingSrcUrl = url;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    originalImage = img;
+    currentRotation = 0;
+    currentFlipH = false;
+    currentFlipV = false;
+    aspectMode = 'free';
+    splitMode = null;
+    cropRect = {x:0, y:0, w:0, h:0};
+    canvasWrap.style.display = 'block';
+    dropZone.classList.add('hidden');
+    btnDropReset.style.display = '';
+    btnCrop.disabled = false;
+    btnSplit.disabled = false;
+    scaleW.value = 0; scaleH.value = 0;
+    valW.textContent = '—'; valH.textContent = '—';
+    setStatus(`已加载: ${url.split('/').pop() || 'image'} (${img.naturalWidth}×${img.naturalHeight})`);
+    fitToWindow();
+  };
+  img.onerror = () => {
+    setStatus('加载图片失败: ' + url);
+  };
+  img.src = url;
+}
+
+// Check URL param on load
+(function initFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const src = params.get('src');
+  if (src) {
+    loadImageFromUrl(decodeURIComponent(src));
+  }
+})();
+
+// ═══════════════════════════════════════════════════════════
+// Save to /webev/-=my-works/ on server
+// ═══════════════════════════════════════════════════════════
+async function saveToServer() {
+  if (!originalImage) { setStatus('没有图片可保存'); return; }
+  setStatus('正在渲染...');
+  try {
+    const offscreen = document.createElement('canvas');
+    renderToCanvas(offscreen, mainCanvas.width, mainCanvas.height);
+    const blob = await new Promise(resolve => offscreen.toBlob(resolve, 'image/png'));
+    if (!blob) { setStatus('渲染失败'); return; }
+
+    // Generate filename
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const base = originalImage.src.split('/').pop().replace(/\.[^.]+$/, '') || 'image';
+    const filename = `${ts}_${base}.png`;
+    const remotePath = `/-=my-works/${filename}`;
+
+    setStatus(`正在上传到 /webev/-=my-works/...`);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload' + remotePath, true);
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) setStatus(`上传中: ${Math.round(e.loaded/e.total*100)}%`);
+    };
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        setStatus(`已保存到 /webev/-=my-works/${filename}`);
+      } else {
+        setStatus('保存失败: ' + (xhr.responseText || xhr.status));
+      }
+    };
+    xhr.onerror = () => setStatus('网络错误，保存失败');
+    xhr.send(blob);
+  } catch(e) {
+    setStatus('保存异常: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Download full processed image (replace original via assignment)
+// ═══════════════════════════════════════════════════════════
+downloadFull = function() {
+  if (!originalImage) return;
+  const offscreen = document.createElement('canvas');
+  renderToCanvas(offscreen, mainCanvas.width, mainCanvas.height);
+  offscreen.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'processed.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setStatus('图片已下载');
+  }, 'image/png');
+};
+
+// ═══════════════════════════════════════════════════════════
+// Download split parts as ZIP
+// ═══════════════════════════════════════════════════════════
+async function downloadZip() {
+  if (!originalImage) { setStatus('没有内容可打包'); return; }
+  setStatus('正在打包...');
+  try {
+    const zip = new JSZip();
+    const base = originalImage.src.split('/').pop().replace(/\.[^.]+$/, '') || 'image';
+
+    if (splitMode) {
+      // Add all split parts
+      const parts = applySplit(splitMode);
+      for (const p of parts) {
+        const blob = await (await fetch(p.dataUrl)).blob();
+        zip.file(`split_${splitMode}x${splitMode}_${String(p.idx).padStart(2,'0')}.png`, blob);
+      }
+      setStatus(`添加 ${parts.length} 个分块到 ZIP`);
+    } else {
+      // Add full processed image
+      const offscreen = document.createElement('canvas');
+      renderToCanvas(offscreen, mainCanvas.width, mainCanvas.height);
+      const blob = await new Promise(resolve => offscreen.toBlob(resolve, 'image/png'));
+      zip.file(`processed_${base}.png`, blob);
+    }
+
+    const zipBlob = await zip.generateAsync({type: 'blob'}, metadata => {
+      setStatus(`正在压缩: ${Math.round(metadata.percent)}%`);
+    });
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(zipBlob);
+    a.download = `img_editor_${new Date().toISOString().slice(0,10)}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setStatus('ZIP 已下载');
+  } catch(e) {
+    setStatus('打包失败: ' + e.message);
+  }
+}
+
+// Wire save and zip buttons
+btnSave.addEventListener('click', saveToServer);
+btnZip.addEventListener('click', downloadZip);
+
+// ═══════════════════════════════════════════════════════════
+// PDF state
+// ═══════════════════════════════════════════════════════════
+let pdfDoc = null;        // loaded PDF document
+let pdfPages = [];        // rendered canvas images for each page
+let pdfCurrentPage = 1;
+let pdfTotal = 0;
+let loadedPdfName = '';   // original PDF filename (without .pdf) for saving pages
+let multiImages = [];    // selected image files for PDF export
+
+// PDF file input
+const pdfInput   = document.getElementById('pdfInput');
+const btnLoadPdf = document.getElementById('btnLoadPdf');
+const pdfPageNav = document.getElementById('pdfPageNav');
+const pdfPageInfo = document.getElementById('pdfPageInfo');
+const pdfTotalPages = document.getElementById('pdfTotalPages');
+const btnPdfPrev  = document.getElementById('btnPdfPrev');
+const btnPdfNext  = document.getElementById('btnPdfNext');
+
+// Multi-image inputs
+const multiImgInput  = document.getElementById('multiImgInput');
+const btnMultiImg    = document.getElementById('btnMultiImg');
+const btnExportPdf   = document.getElementById('btnExportPdf');
+const multiImgCount  = document.getElementById('multiImgCount');
+
+// ═══════════════════════════════════════════════════════════
+// Load PDF
+// ═══════════════════════════════════════════════════════════
+async function loadPdf(file) {
+  if (!file || file.type !== 'application/pdf') {
+    setStatus('请选择 PDF 文件');
+    return;
+  }
+  setStatus('正在加载 PDF...');
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+    pdfTotal = pdfDoc.numPages;
+    pdfPages = [];
+    pdfCurrentPage = 1;
+
+    setStatus(`PDF 共 ${pdfTotal} 页，正在渲染...`);
+    for (let i = 1; i <= pdfTotal; i++) {
+      const page = await pdfDoc.getPage(i);
+      const scale = 2; // render at 2x for quality
+      const viewport = page.getViewport({scale});
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx2 = canvas.getContext('2d');
+      await page.render({canvasContext: ctx2, viewport}).promise;
+      pdfPages.push(canvas);
+      setStatus(`渲染第 ${i} / ${pdfTotal} 页...`);
+    }
+
+    // Store original PDF filename for saving pages
+    loadedPdfName = (file.name || 'document').replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9_\-]/g, '_');
+
+    // Show first page
+    showPdfPage(1);
+    pdfPageNav.style.display = '';
+    pdfTotalPages.textContent = `共 ${pdfTotal} 页`;
+    document.getElementById('btnSavePdfPages').disabled = false;
+    setStatus(`PDF 已加载: ${pdfTotal} 页`);
+  } catch(e) {
+    setStatus('PDF 加载失败: ' + e.message);
+    console.error(e);
+  }
+}
+
+function showPdfPage(pageNum) {
+  if (pageNum < 1 || pageNum > pdfTotal) return;
+  pdfCurrentPage = pageNum;
+  const canvas = pdfPages[pageNum - 1];
+  if (!canvas) return;
+
+  // Create an Image from the canvas
+  const img = new Image();
+  img.onload = () => {
+    originalImage = img;
+    currentRotation = 0;
+    currentFlipH = false;
+    currentFlipV = false;
+    aspectMode = 'free';
+    splitMode = null;
+    cropRect = {x:0, y:0, w:0, h:0};
+    canvasWrap.style.display = 'block';
+    dropZone.classList.add('hidden');
+    btnDropReset.style.display = '';
+    btnCrop.disabled = false;
+    btnSplit.disabled = false;
+    scaleW.value = 0; scaleH.value = 0;
+    valW.textContent = '—'; valH.textContent = '—';
+    fitToWindow();
+  };
+  img.src = canvas.toDataURL('image/png');
+  pdfPageInfo.textContent = `${pageNum} / ${pdfTotal}`;
+  btnPdfPrev.disabled = pageNum <= 1;
+  btnPdfNext.disabled = pageNum >= pdfTotal;
+  setStatus(`PDF 第 ${pageNum} / ${pdfTotal} 页`);
+}
+
+// Wire PDF controls
+btnLoadPdf.addEventListener('click', () => pdfInput.click());
+pdfInput.addEventListener('change', e => {
+  if (e.target.files[0]) loadPdf(e.target.files[0]);
+});
+btnPdfPrev.addEventListener('click', () => showPdfPage(pdfCurrentPage - 1));
+btnPdfNext.addEventListener('click', () => showPdfPage(pdfCurrentPage + 1));
+
+// Save all PDF pages to server
+document.getElementById('btnSavePdfPages').addEventListener('click', async () => {
+  if (!pdfPages.length || !loadedPdfName) { setStatus('没有可保存的 PDF 页面'); return; }
+  setStatus('正在保存所有页面到服务器...');
+  const folder = `/-=my-works/${loadedPdfName}`;
+  let saved = 0;
+  let failed = 0;
+  for (let i = 0; i < pdfPages.length; i++) {
+    const canvas = pdfPages[i];
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const filename = `${String(i + 1).padStart(3, '0')}.png`;
+    const remotePath = `${folder}/${filename}`;
+    try {
+      const resp = await fetch('/api/upload' + remotePath, { method: 'POST', body: blob });
+      if (resp.ok) {
+        saved++;
+      } else {
+        failed++;
+      }
+    } catch(e) {
+      failed++;
+    }
+    setStatus(`正在保存第 ${i+1} / ${pdfPages.length} 页...`);
+  }
+  if (failed === 0) {
+    setStatus(`✓ 已保存 ${saved} 张页面到 /webev/${folder}/`);
+  } else {
+    setStatus(`已保存 ${saved} 张，失败 ${failed} 张`);
+  }
+});
+
+// Drag & drop PDF onto canvas area
+canvasArea.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    if (file.type === 'application/pdf') {
+      loadPdf(file);
+    } else {
+      loadImage(file);
+    }
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// Multi-image → PDF export
+// ═══════════════════════════════════════════════════════════
+function loadImageAsCanvas(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx2 = canvas.getContext('2d');
+        ctx2.drawImage(img, 0, 0);
+        resolve(canvas);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+btnMultiImg.addEventListener('click', () => multiImgInput.click());
+multiImgInput.addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  if (files.length === 0) return;
+  multiImages = files;
+  multiImgCount.style.display = '';
+  multiImgCount.textContent = `已选 ${files.length} 张图片`;
+  btnExportPdf.disabled = false;
+  setStatus(`已选择 ${files.length} 张图片，可导出为 PDF`);
+});
+
+btnExportPdf.addEventListener('click', async () => {
+  if (multiImages.length === 0) { setStatus('请先选择图片'); return; }
+  setStatus('正在生成 PDF...');
+  try {
+    const { jsPDF } = window.jspdf;
+    // Use first image to determine orientation
+    const firstCanvas = await loadImageAsCanvas(multiImages[0]);
+    const isLandscape = firstCanvas.width > firstCanvas.height;
+    const pdf = new jsPDF({
+      orientation: isLandscape ? 'landscape' : 'portrait',
+      unit: 'px',
+      format: [firstCanvas.width, firstCanvas.height]
+    });
+
+    for (let i = 0; i < multiImages.length; i++) {
+      const file = multiImages[i];
+      const canvas = await loadImageAsCanvas(file);
+      if (i > 0) {
+        const isImgLandscape = canvas.width > canvas.height;
+        pdf.addPage([canvas.width, canvas.height], isImgLandscape ? 'landscape' : 'portrait');
+      }
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
+      setStatus(`添加第 ${i+1} / ${multiImages.length} 张...`);
+    }
+
+    const blob = pdf.output('blob');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `merged_${new Date().toISOString().slice(0,10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setStatus(`PDF 已生成，共 ${multiImages.length} 页`);
+  } catch(e) {
+    setStatus('PDF 生成失败: ' + e.message);
+    console.error(e);
+  }
+});
 </script>
 </body>
 </html>
