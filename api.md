@@ -12,7 +12,7 @@
 > | [新建目录](#新建目录--post-apimkdirpath) | `POST` | `/api/mkdir/<path>` | 创建目录（mkdir -p） |
 > | [上传文件](#上传文件--post-apiuploadpath) | `POST` | `/api/upload/<path>` | 上传单个文件 |
 > | [实时图片处理](#实时图片处理--post-apiimg) | `POST` | `/api/img` | 二进制图片处理（缩放/裁切/转格式），高吞吐实时服务 |
-> | [批量图片处理](#批量图片处理--post-apibatch-img) | `POST` | `/api/batch-img` | 本地文件/目录批量处理，支持本地 vips 和远程算力两种模式 |
+> | [批量图片处理](#批量图片处理--post-apibatch-img) | `POST` | `/api/batch-img` | 本地文件/目录批量处理，支持本地 imgproxy 和远程算力两种模式 |
 > | [Gallery 整理](#gallery-整理--post-apigallerize) | `POST` | `/api/gallerize` | 整理 gallery 目录结构、生成封面、批量转换图片为 `.jiff` |
 
 ---
@@ -530,8 +530,10 @@ curl -X POST http://localhost:5080/api/upload/archives/2026/march/report.pdf \
 
 ## 实时图片处理 — `POST /api/img`
 
-将图片二进制直接 POST 到此接口，服务端完成缩放、裁切、格式转换后立即返回处理结果。  
+将图片二进制直接 POST 到此接口，服务端通过 imgproxy 完成缩放、裁切、格式转换后立即返回处理结果。  
 **参数与 `/img/` 完全一致**，但不使用 nginx proxy_cache，专为需要最高吞吐量的实时处理场景设计。
+
+内部通过 **HTTP API** 与 imgproxy 通信（`IMGPROXY_HOST:IMGPROXY_PORT`，默认 `imgproxy:8080`），使用 imgproxy 的 raw upload 模式。
 
 ```
 POST /api/img?w=200&h=150&fit=cover&fmt=webp&q=80
@@ -543,11 +545,21 @@ Body: <raw image bytes>
 
 | 特性 | `/img/<path>` | `/api/img` |
 |------|--------------|------------|
-| 图片来源 | 服务器本地文件 | 请求 body（内存直接处理） |
+| 图片来源 | 服务器本地文件（通过 imgproxy 的 `local://` URL 读取） | 请求 body（通过 imgproxy raw upload 处理） |
 | Nginx 缓存 | ✅ proxy_cache | ❌ 无缓存（每次都处理） |
 | 适用场景 | 静态资源加速 | 实时处理流水线、高并发转换服务 |
-| 磁盘 I/O | 读取磁盘文件 | 纯内存操作 |
+| 磁盘 I/O | imgproxy 读取磁盘文件 | 纯内存操作到 imgproxy |
 | CPU 使用 | 缓存命中时为零 | 每请求全速处理，饱和所有核心 |
+
+### imgproxy 架构说明
+
+两个接口均通过 imgproxy 处理图片：
+
+- **imgproxy** 是独立 Docker 容器（`imgproxy` 服务名，端口 8080）
+- 图片通过 `local://` URL 传递给 imgproxy，路径相对于 `IMGPROXY_LOCAL_FILESYSTEM_ROOT=/data`
+- **重要**：`local://` URL 使用**三斜杠**格式（`local:///.imgproxy-tmp/xxx`），否则 imgproxy 会将路径中首个段解析为 hostname，导致 404
+- imgproxy 不对 `local://` URL 做 base64 编码（raw URL 直传）
+- 格式通过 `/format:<ext>` 处理段指定（如 `/format:webp`），不是 `@webp` 后缀
 
 ### 查询参数
 
@@ -572,7 +584,7 @@ Body: <raw image bytes>
 ### 请求
 
 - **Method**: `POST`
-- **Content-Type**: `image/jpeg`、`image/webp`、`image/png`、`image/avif` 等（任意 libvips 支持的格式）
+- **Content-Type**: `image/jpeg`、`image/webp`、`image/png`、`image/avif` 等（任意 imgproxy 支持的格式）
 - **Body**: 原始图片二进制字节（无需 multipart/form-data 封装）
 
 ### 响应
@@ -585,9 +597,9 @@ Body: <raw image bytes>
 
 | 头 | 说明 |
 |----|------|
-| `X-Vips` | `processed`（处理完成）或 `passthrough`（无参数直通） |
-| `X-Vips-Size` | 处理后尺寸，如 `200x150` |
+| `X-Imgproxy` | `processed`（处理完成）或 `passthrough`（无参数直通） |
 | `Content-Length` | 输出字节数 |
+| `Cache-Control` | `private, max-age=86400` |
 
 #### 错误响应
 
@@ -598,7 +610,7 @@ Body: <raw image bytes>
 | `400` | `bad_request` | 请求 body 为空 |
 | `405` | `method_not_allowed` | 使用了非 POST 方法 |
 | `415` | `unsupported_media_type` | 图片格式无法解码（损坏或不支持的格式） |
-| `503` | `service_unavailable` | lua-vips 未安装 |
+| `502` | `bad_gateway` | imgproxy 处理失败（超时、格式错误等） |
 | `500` | `internal` | 图片编码失败 |
 
 ### 示例
@@ -637,8 +649,7 @@ curl -X POST "http://localhost:5080/api/img" \
 
 ### 高并发使用建议
 
-- **CPU 并发**：服务自动启用 libvips 内部线程池（`VIPS_CONCURRENCY=0`），每个请求可饱和所有 CPU 核心。
-  若需限制 vips 线程数，设置环境变量 `VIPS_CONCURRENCY=N`（如 `4`）。
+- **CPU 并发**：imgproxy 自动启用内部线程池（`IMGPROXY_MAX_WORKERS=0` = auto），每个请求可饱和所有 CPU 核心。
 - **连接池**：建议客户端使用 HTTP keep-alive + 连接池，减少 TCP 握手开销。
 - **body 缓冲**：nginx 配置 `client_body_buffer_size 32m`，32 MB 以内的图片全程内存处理；超过则自动落盘临时文件，Lua 侧透明处理。
 - **无缓存**：本接口不缓存，适合每次输入都不同的场景（如用户上传图片处理、动态水印等）。  
@@ -647,7 +658,7 @@ curl -X POST "http://localhost:5080/api/img" \
 ### 动态图保护（Animated WebP/GIF）
 
 - 接口会自动检测 **动态 WebP** 和 **动态 GIF**（通过文件头扫描）。
-- 检测到动态图时，直接返回原始字节（HTTP 200），响应头标记为 `X-Vips: passthrough-animated`。
+- 检测到动态图时，直接返回原始字节（HTTP 200），响应头标记为 `X-Imgproxy: passthrough-animated`。
 - 这避免了缩放/转码导致动画帧丢失的问题。
 - 如需强制处理（会丢失动画），使用 `ignore_exts` 参数排除该格式。
 
@@ -665,7 +676,7 @@ curl -X POST "http://localhost:5080/api/img" \
 ## 批量图片处理 — `POST /api/batch-img`
 
 对服务器本地文件或目录中的图片进行批量处理（缩放、裁切、格式转换）。  
-支持两种处理模式：**本地模式**（使用 libvips 在当前实例处理）和**远程模式**（将图片转发给另一台高算力实例的 `/api/img` 接口处理）。
+支持两种处理模式：**本地模式**（使用 imgproxy HTTP API 在当前实例处理）和**远程模式**（将图片转发给另一台高算力实例的 `/api/img` 接口处理）。
 
 ```
 POST /api/batch-img
@@ -707,7 +718,7 @@ Content-Type: application/json
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `mode` | string | `"local"` | `"local"` — libvips 本地处理；`"remote"` — 转发给远端 `/api/img` |
+| `mode` | string | `"local"` | `"local"` — imgproxy HTTP API 本地处理；`"remote"` — 转发给远端 `/api/img` |
 
 #### 远程模式参数（`mode=remote` 时生效）
 
@@ -833,7 +844,7 @@ curl -X POST http://localhost:5080/api/batch-img \
 ### 并发与性能调优
 
 #### 本地模式
-- libvips 内部自动开启多线程处理单张图片，`VIPS_CONCURRENCY=0` 可饱和所有 CPU 核心。
+- imgproxy 自动启用内部多线程处理单张图片，`IMGPROXY_MAX_WORKERS=0` 可饱和所有 CPU 核心。
 - 文件顺序处理；如需更高并发，可在多个 nginx worker 上同时发起多个 `/api/batch-img` 请求（传入不同子目录）。
 
 #### 远程模式
@@ -884,12 +895,13 @@ curl -X POST http://localhost:5080/api/batch-img \
 ### 批量图片处理 API（`lib/batchapi.lua`）
 
 - **模块**：`nginx/lua/lib/batchapi.lua`，路由在 `nginx/conf/default_app/main.conf`
-- **双模式设计**：`mode=local` 直接调用 libvips（零网络开销）；`mode=remote` 通过 TCP HTTP/1.1 转发至远端 `/api/img`
+- **双模式设计**：`mode=local` 通过 HTTP 调用 imgproxy raw upload API（高性能）；`mode=remote` 通过 TCP HTTP/1.1 转发至远端 `/api/img`
 - **并发控制**：远端模式使用 `ngx.semaphore` 信号量精确控制飞行中的请求数，防止远端过载
 - **连接复用**：远端 socket 调用 `setkeepalive(10000, 64)` 归还连接池，降低 TCP 握手开销
 - **输出命名**：三种方式：原地覆盖、`out_suffix`（插入文件名后缀）、`out_dir`（写到新目录）
 - **文件扫描**：LuaJIT FFI `opendir/readdir`，可选递归子目录，支持过滤非图片文件
 - **安全性**：检测路径 `..`（400），`webdav_root` 相对路径自动补全
+- **imgproxy URL**：使用三斜杠 `local:///` 格式避免 hostname 解析问题
 
 ---
 
@@ -1011,8 +1023,9 @@ POST /api/gallerize
 
 ### 实现细节
 
-- **模块**：`nginx/lua/lib/gallerize.lua`，复用 `lib/imgproc.lua` 的处理核心
+- **模块**：`nginx/lua/lib/gallerize.lua`，通过 imgproxy HTTP API 处理图片
 - **文件操作**：LuaJIT FFI `opendir/readdir/rename/mkdir/rmdir/unlink`，零 shell 调用
 - **幂等性**：重复请求已处理的目录会立即返回 skip，不做任何修改
 - **动态图保护**：继承 `imgproc` 的动态 WebP/GIF 检测，自动跳过不处理
 - **安全性**：`..` 路径穿越检测（400），路径必须在 webdav root 范围内（403）
+- **imgproxy URL**：封面和图片转换均通过 HTTP 转发给 imgproxy，使用 raw upload 模式

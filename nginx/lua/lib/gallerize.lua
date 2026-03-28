@@ -30,10 +30,31 @@ local ffi = require("ffi")
 local imgproc = require("lib.imgproc")
 local stat_ffi = require("lib.stat_ffi")
 local semaphore = require("ngx.semaphore")
+local http = require("resty.http")
 local ngx = ngx
 
 local C = ffi.C
 local DT_DIR = 4
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- imgproxy configuration
+-- ─────────────────────────────────────────────────────────────────────────────
+local IMGPROXY_HOST = os.getenv("IMGPROXY_HOST") or "imgproxy"
+local IMGPROXY_PORT = os.getenv("IMGPROXY_PORT") or "8080"
+
+-- Build imgproxy processing string
+local function imgproxy_processing_string(w, h, fit, fmt, q)
+    local parts = {}
+    if w and w > 0 then table.insert(parts, "width:" .. tostring(w)) end
+    if h and h > 0 then table.insert(parts, "height:" .. tostring(h)) end
+    if fit and fit ~= "contain" then table.insert(parts, "fit:" .. fit) end
+    if fmt and fmt ~= "" then
+        if fmt == "jpeg" then fmt = "jpg" end
+        table.insert(parts, "format:" .. fmt)
+    end
+    if q and q > 0 then table.insert(parts, "quality:" .. tostring(q)) end
+    return table.concat(parts, "/")
+end
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Configuration
@@ -270,40 +291,77 @@ local function rmdir_if_empty(dir_path)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Image processing
+-- Image processing (via imgproxy HTTP API)
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- Process single image using imgproc
+-- Process single image using imgproxy HTTP raw upload
 -- Returns: ok (bool), result_or_error
 local function process_image(src_path, dst_path, params)
-    local ext = get_ext(src_path)
-    local ok, img_or_reason = imgproc.load_from_file(src_path, ext, params)
-    if not ok then
-        -- Animated image or load error - copy as-is
-        if img_or_reason and img_or_reason:find("animated") then
-            -- Copy file
-            local src_f = io.open(src_path, "rb")
-            if not src_f then
-                return false, "cannot open source: " .. src_path
-            end
-            local data = src_f:read("*a")
-            src_f:close()
+    -- Read source file
+    local src_f = io.open(src_path, "rb")
+    if not src_f then
+        return false, "cannot open source: " .. src_path
+    end
+    local body = src_f:read("*a")
+    src_f:close()
 
-            local dst_f = io.open(dst_path, "wb")
-            if not dst_f then
-                return false, "cannot create destination: " .. dst_path
-            end
-            dst_f:write(data)
-            dst_f:close()
-            return true, {skipped = true, reason = img_or_reason}
+    local ext = get_ext(src_path)
+
+    -- Check animated (quick header check)
+    local skip, reason = imgproc.should_skip_animated(ext, body)
+    if skip then
+        -- Copy file as-is for animated images
+        local dst_f = io.open(dst_path, "wb")
+        if not dst_f then
+            return false, "cannot create destination: " .. dst_path
         end
-        return false, img_or_reason or "load failed"
+        dst_f:write(body)
+        dst_f:close()
+        return true, {skipped = true, reason = reason}
     end
 
-    local img = img_or_reason
-    local ok2, result = imgproc.process_pipeline(img, params, ext, {strip = true})
-    if not ok2 then
-        return false, result
+    -- Build imgproxy URL for raw upload
+    local processing = imgproxy_processing_string(
+        params.w, params.h, params.fit, params.fmt, params.q
+    )
+    local imgproxy_path = "/insecure/" .. processing .. "/raw"
+    local mime = imgproc.MIME_OF_EXT[ext] or "application/octet-stream"
+
+    -- Connect to imgproxy
+    local httpc = http.new()
+    httpc:set_timeout(30000)
+
+    local ok, err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
+    if not ok then
+        return false, "imgproxy connect failed: " .. tostring(err)
+    end
+
+    local proxy_res, err = httpc:request({
+        method = "POST",
+        path = imgproxy_path,
+        headers = {
+            ["Host"] = "localhost",
+            ["Content-Type"] = mime,
+            ["Content-Length"] = tostring(#body),
+        },
+        body = body,
+    })
+
+    if not proxy_res then
+        httpc:close()
+        return false, "imgproxy request failed: " .. tostring(err)
+    end
+
+    local res_body, err = proxy_res:read_body()
+    if not res_body then
+        httpc:close()
+        return false, "imgproxy read body failed: " .. tostring(err)
+    end
+
+    httpc:set_keepalive(10000, 64)
+
+    if proxy_res.status ~= 200 then
+        return false, "imgproxy returned " .. proxy_res.status
     end
 
     -- Write output
@@ -311,14 +369,10 @@ local function process_image(src_path, dst_path, params)
     if not dst_f then
         return false, "cannot create output file: " .. dst_path
     end
-    dst_f:write(result.buf)
+    dst_f:write(res_body)
     dst_f:close()
 
-    return true, {
-        width = result.width,
-        height = result.height,
-        size = #result.buf,
-    }
+    return true, {size = #res_body}
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────

@@ -2,9 +2,14 @@
 -- Batch image processing — POST /api/batch-img
 --
 -- Processes all image files in a local path (file or directory) using either:
---   mode=local   — libvips in-process (zero network, saturates local CPU)
+--   mode=local   — imgproxy HTTP API (same-host Docker service)
 --   mode=remote  — forwards each image to a remote /api/img endpoint
 --                  (offloads heavy compute to a high-power box)
+--
+-- IMPORTANT: This module now uses imgproxy for ALL image processing.
+--   - lua-vips is no longer used (see lib/vips.lua - deprecated)
+--   - local mode: imgproxy reads from shared /data directory via local:// URLs
+--   - remote mode: forwards to remote /api/img endpoint
 --
 -- ─────────────────────────────────────────────────────────────────────────────
 -- REQUEST
@@ -17,7 +22,7 @@
 --     "path":        "/images/vacation",   -- local file or directory (required)
 --     "recursive":   false,                -- recurse into sub-directories (default: false)
 --
---     -- image processing params (same as /api/img / /img/)
+--     -- image processing params (same as /img/ / /api/img)
 --     "w":    800,                         -- target width  (pixels)
 --     "h":    600,                         -- target height (pixels)
 --     "fit":  "contain",                   -- contain | cover | fill | scale
@@ -42,9 +47,6 @@
 --     "connect_timeout_ms": 5000,         -- TCP connect timeout ms (default: 5000)
 --     "send_timeout_ms":    30000,        -- send timeout ms (default: 30000)
 --     "recv_timeout_ms":    60000,        -- recv timeout ms (default: 60000)
---
---     -- local mode concurrency (ignored when mode=remote)
---     "local_threads": 0                  -- vips worker threads per item (0 = auto, default: 0)
 --   }
 --
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -68,11 +70,12 @@
 -- DESIGN NOTES
 -- ─────────────────────────────────────────────────────────────────────────────
 --
--- Local mode:
---   • Uses ngx.thread.spawn to run multiple vips pipelines in the same worker.
---   • vips.concurrency_set controls internal thread pool per vips operation.
---   • Images are read and written directly to disk (no body buffering needed).
---   • No network I/O.
+-- Local mode (imgproxy):
+--   • imgproxy runs as separate Docker service accessible via Docker DNS
+--   • imgproxy reads source files from shared /data directory via local:// URLs
+--   • Uses triple-slash local:/// format to avoid hostname parsing bug
+--   • HTTP request/response for each image (but zero-copy disk read on imgproxy side)
+--   • Concurrent processing via ngx.thread.spawn
 --
 -- Remote mode:
 --   • Each image is read from disk, sent via HTTP/1.1 POST to remote /api/img.
@@ -94,6 +97,12 @@ local _M = {}
 local ffi      = require("ffi")
 local bit      = require("bit")
 local imgproc  = require("lib.imgproc")
+local http     = require("resty.http")
+
+-- ── imgproxy config ─────────────────────────────────────────────────────────
+
+local IMGPROXY_HOST = os.getenv("IMGPROXY_HOST") or "imgproxy"
+local IMGPROXY_PORT = os.getenv("IMGPROXY_PORT") or "8080"
 
 -- ── FFI: opendir/readdir/stat ──────────────────────────────────────────────
 
@@ -147,8 +156,8 @@ end
 
 local function clamp(v, lo, hi)
     if v < lo then return lo end
-    if v > hi then return hi end
-    return v
+    if v > hi then return v end
+    return hi
 end
 
 local function ext_of(path)
@@ -209,6 +218,33 @@ local function write_file(path, data)
     return true
 end
 
+-- ── imgproxy URL builder ────────────────────────────────────────────────────
+
+-- Build imgproxy processing string from params
+local function build_processing_string(w, h, fit, fmt, q)
+    local parts = {}
+    if w and w > 0 then table.insert(parts, "width:" .. tostring(w)) end
+    if h and h > 0 then table.insert(parts, "height:" .. tostring(h)) end
+    if fit and fit ~= "contain" then table.insert(parts, "fit:" .. fit) end
+    if fmt and fmt ~= "" then
+        if fmt == "jpeg" then fmt = "jpg" end
+        table.insert(parts, "format:" .. fmt)
+    end
+    if q and q > 0 then table.insert(parts, "quality:" .. tostring(q)) end
+    return table.concat(parts, "/")
+end
+
+-- Build imgproxy local:// URL for a file path
+-- imgproxy LOCAL_FILESYSTEM_ROOT=/data, so:
+--   /data/images/photo.jpg → local:///images/photo.jpg
+local function build_imgproxy_url(rel_path, w, h, fit, fmt, q)
+    local processing = build_processing_string(w, h, fit, fmt, q)
+    -- Use triple-slash local:/// to avoid hostname parsing bug
+    return "/insecure/" .. processing .. "/plain/local:///" .. rel_path
+end
+
+-- ── Collect image files from path ──────────────────────────────────────────
+
 -- Collect image files from path (file or directory)
 -- ignore_set: table of extensions to skip (e.g. {gif=true, webp=true})
 local function collect_files(path, recursive, ignore_set)
@@ -243,6 +279,8 @@ local function collect_files(path, recursive, ignore_set)
     table.sort(files)
     return files
 end
+
+-- ── Build destination path ─────────────────────────────────────────────────
 
 -- Build destination path for one source file
 local function dst_path(src, out_dir, out_suffix, out_fmt)
@@ -346,9 +384,9 @@ local function parse_json_body(s)
     return out
 end
 
--- ── Local processing (lib/imgproc) ────────────────────────────────────────
+-- ── Local processing via imgproxy HTTP ─────────────────────────────────────
 
-local function process_local_one(src, dst, params, overwrite)
+local function process_local_one(src, dst, params, overwrite, webdav_root)
     if not overwrite and src ~= dst then
         local st = ffi.new("stat_t")
         if ffi.C.stat(dst, st) == 0 then
@@ -358,9 +396,11 @@ local function process_local_one(src, dst, params, overwrite)
 
     local t0 = ngx.now()
 
+    -- Read source file
     local body, rerr = read_file(src)
     if not body then return false, rerr end
 
+    local sz_in = #body
     local src_ext = ext_of(src)
 
     -- Check animated (quick header check)
@@ -371,28 +411,73 @@ local function process_local_one(src, dst, params, overwrite)
             local wok, werr = write_file(dst, body)
             if not wok then return false, werr end
         end
-        local sz = #body
-        return true, { src=src, dst=dst, size_in=sz, size_out=sz, ms=0, note=reason }
+        return true, { src=src, dst=dst, size_in=sz_in, size_out=sz_in, ms=0, note=reason }
     end
 
-    -- Load via imgproc
-    local ok, img_or_err = imgproc.load_from_buffer(body, src_ext, params)
+    -- Build imgproxy URL
+    -- Convert absolute path to relative path for local:// URL
+    -- /data/images/photo.jpg → images/photo.jpg
+    local rel_path = src
+    if webdav_root and src:find("^" .. webdav_root) then
+        rel_path = src:sub(#webdav_root + 2)
+    elseif src:find("^/data/") then
+        rel_path = src:sub(7)  -- remove /data/ prefix
+    end
+
+    local processing = build_processing_string(
+        params.w and tonumber(params.w),
+        params.h and tonumber(params.h),
+        params.fit,
+        params.fmt,
+        params.q and tonumber(params.q)
+    )
+
+    -- For raw upload mode: POST the image directly to imgproxy
+    local imgproxy_path = "/insecure/" .. processing .. "/raw"
+    local mime = imgproc.MIME_OF_EXT[src_ext] or "application/octet-stream"
+
+    -- Connect to imgproxy
+    local httpc = http.new()
+    httpc:set_timeout(30000)
+
+    local ok, err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
     if not ok then
-        return false, img_or_err
+        return false, "imgproxy connect failed: " .. tostring(err)
     end
-    local img = img_or_err
-    body = nil  -- GC hint
 
-    -- Process
-    local ok2, result = imgproc.process_pipeline(img, params, src_ext, {strip=true})
-    if not ok2 then return false, result end
+    local proxy_res, err = httpc:request({
+        method = "POST",
+        path = imgproxy_path,
+        headers = {
+            ["Host"] = "localhost",
+            ["Content-Type"] = mime,
+            ["Content-Length"] = tostring(#body),
+        },
+        body = body,
+    })
 
-    local sz_in = file_size(src)
-    local wok, werr = write_file(dst, result.buf)
+    if not proxy_res then
+        httpc:close()
+        return false, "imgproxy request failed: " .. tostring(err)
+    end
+
+    local res_body, err = proxy_res:read_body()
+    if not res_body then
+        httpc:close()
+        return false, "imgproxy read body failed: " .. tostring(err)
+    end
+
+    httpc:set_keepalive(10000, 64)
+
+    if proxy_res.status ~= 200 then
+        return false, "imgproxy returned " .. proxy_res.status
+    end
+
+    local wok, werr = write_file(dst, res_body)
     if not wok then return false, werr end
 
     local ms = math.floor((ngx.now() - t0) * 1000)
-    return true, { src=src, dst=dst, size_in=sz_in, size_out=#result.buf, ms=ms }
+    return true, { src=src, dst=dst, size_in=sz_in, size_out=#res_body, ms=ms }
 end
 
 -- ── Remote processing (HTTP/1.1 to remote /api/img) ───────────────────────
@@ -694,10 +779,10 @@ function _M.handle(webdav_root)
         end
 
     else
-        -- ── Local mode ─────────────────────────────────────────────────────
+        -- ── Local mode (via imgproxy HTTP) ─────────────────────────────────
         for i, src in ipairs(files) do
             local dst2 = dst_list[i]
-            local ok2, res = process_local_one(src, dst2, img_params, overwrite)
+            local ok2, res = process_local_one(src, dst2, img_params, overwrite, webdav_root)
             if not ok2 then
                 if res == "exists" then
                     skipped = skipped + 1

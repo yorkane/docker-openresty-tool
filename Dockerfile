@@ -1,6 +1,7 @@
 # Dockerfile - docker-openresty-tool
 # Builds on top of yorkane/openresty-base (pre-compiled OpenResty + LuaRocks)
-# Adds: project-specific Lua libraries, nginx config, vips support
+# Adds: project-specific Lua libraries, nginx config
+# Image processing: uses imgproxy (separate Docker service) instead of lua-vips
 
 ARG BASE_IMAGE="ghcr.io/yorkane/openresty-base:latest"
 FROM ${BASE_IMAGE}
@@ -48,12 +49,10 @@ RUN set -eux \
         gnu-libiconv \
         libarchive-tools \
         zziplib-dev \
-        vips \
     \
     # Build deps only needed for lua C extension compilation
     && apk add --no-cache --virtual .build-deps \
         build-base \
-        vips-dev \
         git \
     \
     # Install LuaRocks packages (--server selects manifest source)
@@ -63,25 +62,15 @@ RUN set -eux \
     && luarocks install lua-resty-redis-connector --server="${LUAROCKS_SERVER}" \
     && luarocks install lua-resty-template --server="${LUAROCKS_SERVER}" \
     && luarocks install lua-ffi-zlib      --server="${LUAROCKS_SERVER}" \
-    && luarocks config rocks_provided.luaffi-tkl "2.1-1" \
-    && luarocks install lua-vips          --server="${LUAROCKS_SERVER}" \
     && luarocks install lua-resty-mlcache --server="${LUAROCKS_SERVER}" \
     && luarocks --tree=/usr/local/openresty/luajit purge --only-not-installed \
     \
-    # Ensure lua-vips is in OpenResty LuaJIT's built-in share path.
-    # LuaRocks may install it to /usr/local/share/lua/5.1/ (when default tree is /usr/local)
-    # or directly to /usr/local/openresty/luajit/share/lua/5.1/ depending on luarocks config.
-    # Copy only when it landed outside the LuaJIT tree.
-    && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
-    && if [ ! -f "${LUA_SHARE}/vips.lua" ]; then \
-    cp /usr/local/share/lua/5.1/vips.lua "${LUA_SHARE}/vips.lua"; \
-    cp -r /usr/local/share/lua/5.1/vips/ "${LUA_SHARE}/vips/"; \
-    fi \
+    # NOTE: imgproxy is now deployed as a separate Docker service (see docker-compose.yml).
+    # imgproxy handles all image processing. yot connects via HTTP to imgproxy:8080.
     \
     # Download raw Lua files into OpenResty's luajit share path
     && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
     # OpenResty site lualib path — the canonical location for third-party modules
-    # This path is searched before lualib, making it the correct place for installed libraries
     && SITELIB=/usr/local/openresty/site/lualib \
     && cd "${LUA_SHARE}" \
     && wget -q "${GHRAW}/semyon422/luajit-iconv/master/init.lua" -O libiconv.lua \
@@ -114,7 +103,6 @@ RUN set -eux \
     && wget -q "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" \
     \
     # Copy nginx binary to /usr/local/bin so it's always on PATH
-    # Using mv to reduce image size (the original will be removed)
     && mv /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
     \
     # Clean up build artifacts and caches to reduce image size
@@ -123,22 +111,12 @@ RUN set -eux \
     && rm -rf /root/.cache/* \
     && rm -rf /root/.luarocks/* \
     && rm -rf /usr/local/share/lua/5.1/doc/* \
-    && rm -rf /usr/local/share/lua/5.1/vips/vips-8*/ \
     && rm -rf /usr/local/share/man/* \
     && rm -rf /usr/local/lib/pkgconfig/* \
     && rm -rf /usr/local/include/* \
     && find /usr/local -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true \
-    && find /usr/local -type d -name "vips-*" -exec rm -rf {} + 2>/dev/null || true \
     && find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true \
-    # Cleanup build dependencies
     && apk del .build-deps \
-    \
-    # Re-create libvips.so symlink removed by apk del vips-dev.
-    # lua-vips uses ffi.load("vips") which resolves to libvips.so on Linux.
-    # Alpine's runtime 'vips' package only ships libvips.so.42; unversioned
-    # symlink lives in vips-dev and gets deleted with .build-deps.
-    && LIBVIPS_SO=$(ls /usr/lib/libvips.so.[0-9]* 2>/dev/null | sort -V | tail -1) \
-    && [ -n "${LIBVIPS_SO}" ] && ln -sf "${LIBVIPS_SO}" /usr/lib/libvips.so || true \
     \
     && echo 'docker-openresty-tool layer built successfully'
 

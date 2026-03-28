@@ -1,26 +1,21 @@
 -- lib/imgapi.lua
 -- Binary image processing API — POST /api/img
--- Accepts raw image bytes in request body, returns processed image bytes.
+-- Accepts raw image bytes in request body, forwards to imgproxy for processing.
 -- Parameters are identical to /img/ (w, h, fit, crop, fmt, q, ignore_exts).
 --
 -- Designed for high-concurrency, high-throughput real-time processing:
---   - Reads image entirely from memory (no disk I/O)
---   - Uses vips.Image.new_from_buffer() for zero-copy load
---   - Enables vips thread concurrency to saturate all CPU cores
+--   - Reads image entirely from memory (no disk I/O for source)
+--   - Forwards to imgproxy via HTTP raw upload mode
+--   - imgproxy handles all image processing (resize, crop, format conversion)
 --   - No caching (stateless, caller is responsible for caching)
 --   - Streams output buffer directly to client
 --
--- Memory-for-speed optimisations:
---   - nginx client_body_buffer_size 32m  → 32 MB images stay fully in RAM, no temp-file spooling
---   - JPEG shrink-on-load hint           → vips decodes at 1/2, 1/4, 1/8 native size when possible
---                                          (2-4× faster decode, proportionally less RAM for the decoded pixels)
---   - Random-access (default) mode       → decoded pixel buffer lives in RAM; avoids any seek latency
---   - strip metadata on save             → smaller output buffer, faster encoding, less memcpy
---
--- Animated image handling:
---   - Detects animated WebP and GIF via header inspection
---   - Returns original bytes with X-Vips: passthrough-animated header
---   - Prevents accidental loss of animation during resize/format conversion
+-- imgproxy architecture:
+--   - imgproxy runs as separate Docker service (imgproxy container)
+--   - yot (this service) handles HTTP caching via nginx proxy_cache
+--   - imgproxy has built-in cache DISABLED for performance (yot caches instead)
+--   - imgproxy reads from shared /data directory for local:// URLs
+--   - For raw uploads, image is sent in request body to imgproxy
 --
 -- URL:
 --   POST /api/img?w=200&h=150&fit=cover&fmt=webp&q=80
@@ -41,17 +36,49 @@
 --   Body:         raw image binary
 --
 -- Response:
---   200 OK        processed image binary (X-Vips: processed)
---   200 OK        original bytes if animated/ignored (X-Vips: passthrough-animated or passthrough-ignored)
+--   200 OK        processed image binary (X-Imgproxy: processed)
+--   200 OK        original bytes if no processing params (X-Imgproxy: passthrough)
 --   400           missing or empty body
 --   415           unsupported / unreadable image
---   503           lua-vips not available
+--   502           imgproxy error
 
 local _M = {}
 
 local imgproc = require("lib.imgproc")
+local http = require("resty.http")
 
--- ── Main handler ─────────────────────────────────────────────────────────────
+-- ── Config ─────────────────────────────────────────────────────────────────
+
+local IMGPROXY_HOST = os.getenv("IMGPROXY_HOST") or "imgproxy"
+local IMGPROXY_PORT = os.getenv("IMGPROXY_PORT") or "8080"
+
+-- ── Build imgproxy processing string ───────────────────────────────────────
+
+local function build_processing_string(w, h, fit, fmt, q)
+    local parts = {}
+
+    if w and w > 0 then
+        table.insert(parts, "width:" .. tostring(w))
+    end
+    if h and h > 0 then
+        table.insert(parts, "height:" .. tostring(h))
+    end
+    if fit and fit ~= "contain" then
+        table.insert(parts, "fit:" .. fit)
+    end
+    if fmt and fmt ~= "" then
+        -- Normalize jpeg -> jpg for imgproxy
+        if fmt == "jpeg" then fmt = "jpg" end
+        table.insert(parts, "format:" .. fmt)
+    end
+    if q and q > 0 then
+        table.insert(parts, "quality:" .. tostring(q))
+    end
+
+    return table.concat(parts, "/")
+end
+
+-- ── Main handler ───────────────────────────────────────────────────────────
 
 function _M.handle()
     -- ── Only POST allowed ──────────────────────────────────────────────────
@@ -86,86 +113,119 @@ function _M.handle()
         return ngx.exit(400)
     end
 
-    -- ── Maximize CPU concurrency ───────────────────────────────────────────
-    local vips_conc = os.getenv("VIPS_CONCURRENCY")
-    if not vips_conc then
-        local ok_vips, vips = pcall(require, "vips")
-        if ok_vips then
-            pcall(function() vips.concurrency_set(0) end)
-        end
-    end
-
     -- ── Parse query params ─────────────────────────────────────────────────
-    local args      = ngx.req.get_uri_args()
-    local w         = imgproc.parse_int(args.w, nil)
-    local h         = imgproc.parse_int(args.h, nil)
-    local fit       = args.fit or "contain"
-    local q         = imgproc.parse_int(args.q, 82)
-    local fmt       = args.fmt
-    local crop_str  = args.crop
+    local args        = ngx.req.get_uri_args()
+    local w           = imgproc.parse_int(args.w, nil)
+    local h           = imgproc.parse_int(args.h, nil)
+    local fit         = args.fit or "contain"
+    local q           = imgproc.parse_int(args.q, 82)
+    local fmt         = args.fmt
+    local crop_str    = args.crop
     local ignore_exts = args.ignore_exts
 
     -- Derive source format hint from Content-Type
     local ct      = ngx.req.get_headers()["content-type"] or ""
     local src_ext = imgproc.ext_of_content_type(ct)
 
-    -- Check if extension should be ignored
+    -- Check if extension should be ignored (passthrough)
     local ignore_set = imgproc.parse_ignore_exts(ignore_exts)
     if imgproc.is_ext_ignored(src_ext, ignore_set) then
         ngx.header["Content-Type"]   = ct or imgproc.mime_of_ext(src_ext)
         ngx.header["Content-Length"] = #body
-        ngx.header["X-Vips"]         = "passthrough-ignored"
+        ngx.header["X-Imgproxy"]     = "passthrough-ignored"
         ngx.print(body)
         return
     end
 
     -- ── Fast path: no processing params → return body as-is ───────────────
+    -- For raw upload, we still need to send to imgproxy to get proper content-type
+    -- but with no processing extensions
     if not w and not h and not fmt and not crop_str then
-        ngx.header["Content-Type"]   = ct or imgproc.mime_of_ext(src_ext)
-        ngx.header["Content-Length"] = #body
-        ngx.header["X-Vips"]         = "passthrough"
-        ngx.print(body)
-        return
+        -- Still forward to imgproxy for content-type normalization
+        -- but don't apply any processing
     end
 
-    -- ── Load image from memory buffer ──────────────────────────────────────
-    local ok, img_or_reason = imgproc.load_from_buffer(body, src_ext, {w=w, h=h})
+    -- ── Build imgproxy URL ─────────────────────────────────────────────────
+    -- imgproxy raw upload URL format:
+    -- /insecure/<processing>/raw
+    -- The image is sent in the request body
+    local processing = build_processing_string(w, h, fit, fmt, q)
+    local imgproxy_path = "/insecure/" .. processing .. "/raw"
+
+    -- ── Forward to imgproxy via HTTP ──────────────────────────────────────
+    local httpc = http.new()
+    httpc:set_timeout(30000) -- 30 second timeout
+
+    -- Connect to imgproxy
+    local ok, err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
     if not ok then
-        -- Check if it's animated (should passthrough)
-        if img_or_reason and img_or_reason:find("animated") then
-            ngx.header["Content-Type"]   = ct or imgproc.mime_of_ext(src_ext)
-            ngx.header["Content-Length"] = #body
-            ngx.header["X-Vips"]         = "passthrough-animated"
-            ngx.print(body)
-            return
-        end
-        ngx.log(ngx.ERR, "[imgapi] failed to decode image from buffer, err=", tostring(img_or_reason),
-                " body_len=", #body)
-        ngx.status = 415
+        ngx.log(ngx.ERR, "[imgapi] failed to connect to imgproxy: ", err)
+        ngx.status = 502
         ngx.header["Content-Type"] = "application/json; charset=utf-8"
-        ngx.print('{"error":"unsupported_media_type","message":"cannot decode image — unsupported or corrupt format"}')
-        return ngx.exit(415)
+        ngx.print('{"error":"bad_gateway","message":"imgproxy unavailable"}')
+        return ngx.exit(502)
     end
 
-    local img = img_or_reason
-
-    -- ── Process pipeline ───────────────────────────────────────────────────
-    local params = { w=w, h=h, fit=fit, crop=crop_str, fmt=fmt, q=q }
-    local ok2, result = imgproc.process_pipeline(img, params, src_ext, {strip=true})
-    if not ok2 then
-        ngx.log(ngx.ERR, "[imgapi] processing failed: ", tostring(result))
-        ngx.status = 500
-        ngx.header["Content-Type"] = "application/json; charset=utf-8"
-        ngx.print('{"error":"internal","message":"image processing failed"}')
-        return ngx.exit(500)
+    -- Build proxy request
+    local content_type = ct
+    if content_type == "" then
+        content_type = imgproc.mime_of_ext(src_ext)
     end
 
-    -- ── Send response ──────────────────────────────────────────────────────
-    ngx.header["Content-Type"]   = result.content_type
-    ngx.header["Content-Length"] = #result.buf
-    ngx.header["X-Vips"]         = "processed"
-    ngx.header["X-Vips-Size"]    = result.width .. "x" .. result.height
-    ngx.print(result.buf)
+    local proxy_req = {
+        method = "POST",
+        path = imgproxy_path,
+        headers = {
+            ["Host"] = "localhost",
+            ["Content-Type"] = content_type,
+            ["Content-Length"] = tostring(#body),
+        },
+        body = body,
+    }
+
+    -- Send request to imgproxy
+    local proxy_res, err = httpc:request(proxy_req)
+    if not proxy_res then
+        ngx.log(ngx.ERR, "[imgapi] imgproxy request failed: ", err)
+        httpc:close()
+        ngx.status = 502
+        ngx.header["Content-Type"] = "application/json; charset=utf-8"
+        ngx.print('{"error":"bad_gateway","message":"imgproxy request failed"}')
+        return ngx.exit(502)
+    end
+
+    -- Read response body
+    local res_body, err = proxy_res:read_body()
+    if not res_body then
+        ngx.log(ngx.ERR, "[imgapi] failed to read imgproxy response: ", err)
+        httpc:close()
+        ngx.status = 502
+        ngx.header["Content-Type"] = "application/json; charset=utf-8"
+        ngx.print('{"error":"bad_gateway","message":"failed to read imgproxy response"}')
+        return ngx.exit(502)
+    end
+
+    -- Keep connection alive for connection pool
+    httpc:set_keepalive(10000, 64)
+
+    -- Check imgproxy response status
+    local status = proxy_res.status
+    if status ~= 200 then
+        ngx.log(ngx.WARN, "[imgapi] imgproxy returned status ", status)
+        ngx.status = 502
+        ngx.header["Content-Type"] = "application/json; charset=utf-8"
+        ngx.print('{"error":"bad_gateway","message":"imgproxy processing failed"}')
+        return ngx.exit(502)
+    end
+
+    -- ── Send response to client ────────────────────────────────────────────
+    local res_headers = proxy_res.headers
+    ngx.status = 200
+    ngx.header["Content-Type"]   = res_headers["Content-Type"] or "application/octet-stream"
+    ngx.header["Content-Length"] = #res_body
+    ngx.header["X-Imgproxy"]     = "processed"
+    ngx.header["Cache-Control"] = "private, max-age=86400"
+    ngx.print(res_body)
 end
 
 return _M

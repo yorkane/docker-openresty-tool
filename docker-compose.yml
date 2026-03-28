@@ -19,6 +19,9 @@ services:
       - OR_IMG_CACHE_PATH=/data/cache  # cache directory
       - OR_IMG_CACHE_BACKGROUND_UPDATE=on  # background update
       - OR_IMG_CACHE_USE_STALE=error timeout updating http_500 http_502 http_503 http_504  # stale cache usage
+      # imgproxy service (yot handles all caching, imgproxy has cache disabled)
+      - IMGPROXY_HOST=imgproxy
+      - IMGPROXY_PORT=8080
       # - OR_AUTH_USER=admin:admin
     entrypoint: ["sh", "/usr/local/openresty/nginx/conf/entrypoint.sh"]
     volumes:
@@ -32,3 +35,35 @@ services:
     restart: unless-stopped
     ports:
       - "5080:80"
+    depends_on:
+      - imgproxy
+
+  imgproxy:
+    image: ghcr.io/imgproxy/imgproxy:latest
+    container_name: imgproxy
+    environment:
+      # Performance-first: disable all caches, maximize workers
+      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/data
+      - IMGPROXY_DISABLE_CACHE=true
+      - IMGPROXY_MAX_WORKERS=0              # 0 = auto (use all CPU cores)
+      - IMGPROXY_CONCURRENCY=0              # 0 = auto (unlimited concurrent operations)
+      - IMGPROXY_MAX_SRC_FILESIZE=104857600  # 100MB max source file
+      - IMGPROXY_MAX_RESOLUTION=66741696    # 64MP max resolution
+      - IMGPROXY_STRIP_COLOR_PROFILE=Never   # Keep color profile for accuracy
+      - IMGPROXY_ENFORCE_TRANSPARENCY=false
+      - IMGPROXY_GZIP_MIME_TYPES=           # Disable gzip compression (yot will handle)
+      - IMGPROXY_LOG_LEVEL=warn             # Minimal logging for performance
+      - IMGPROXY_DEV_MODE_STRICT=false
+      - IMGPROXY_FAMILY=0                   # IPv4 only
+    volumes:
+      - ./data:/data:ro                     # Read-only access to webdav directory
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  imgproxy_cache:
