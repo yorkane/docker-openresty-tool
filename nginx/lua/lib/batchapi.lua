@@ -220,12 +220,33 @@ end
 
 -- ── imgproxy URL builder ────────────────────────────────────────────────────
 
+-- Map our fit values to imgproxy resizing_type
+-- imgproxy supports: fit (default), fill (crop to fill), crop
+-- Our API: contain (fit), cover (fill), fill (no equiv - fallback to fit), scale (fit)
+-- Note: imgproxy has NO stretch mode, so fit=fill falls back to default (fit)
+local function map_resizing_type(fit)
+    if fit == "cover" then
+        return "fill"  -- crop to fill, preserve aspect ratio
+    elseif fit == "fill" then
+        return nil  -- no stretch mode in imgproxy, fallback to default (fit)
+    elseif fit == "scale" then
+        return nil  -- same as contain, use default (fit)
+    else
+        return nil  -- nil means use imgproxy default (fit)
+    end
+end
+
 -- Build imgproxy processing string from params
 local function build_processing_string(w, h, fit, fmt, q)
     local parts = {}
     if w and w > 0 then table.insert(parts, "width:" .. tostring(w)) end
     if h and h > 0 then table.insert(parts, "height:" .. tostring(h)) end
-    if fit and fit ~= "contain" then table.insert(parts, "fit:" .. fit) end
+
+    local resizing_type = map_resizing_type(fit)
+    if resizing_type then
+        table.insert(parts, "resizing_type:" .. resizing_type)
+    end
+
     if fmt and fmt ~= "" then
         if fmt == "jpeg" then fmt = "jpg" end
         table.insert(parts, "format:" .. fmt)
@@ -414,7 +435,7 @@ local function process_local_one(src, dst, params, overwrite, webdav_root)
         return true, { src=src, dst=dst, size_in=sz_in, size_out=sz_in, ms=0, note=reason }
     end
 
-    -- Build imgproxy URL
+    -- Build imgproxy URL using local:// URL scheme
     -- Convert absolute path to relative path for local:// URL
     -- /data/images/photo.jpg → images/photo.jpg
     local rel_path = src
@@ -432,11 +453,11 @@ local function process_local_one(src, dst, params, overwrite, webdav_root)
         params.q and tonumber(params.q)
     )
 
-    -- For raw upload mode: POST the image directly to imgproxy
-    local imgproxy_path = "/insecure/" .. processing .. "/raw"
-    local mime = imgproc.MIME_OF_EXT[src_ext] or "application/octet-stream"
+    -- Use local:// URL scheme: /insecure/<processing>/plain/local:///<rel_path>
+    -- imgproxy reads directly from local filesystem (IMGPROXY_LOCAL_FILESYSTEM_ROOT=/data)
+    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
 
-    -- Connect to imgproxy
+    -- Connect to imgproxy and request the processed image
     local httpc = http.new()
     httpc:set_timeout(30000)
 
@@ -446,14 +467,11 @@ local function process_local_one(src, dst, params, overwrite, webdav_root)
     end
 
     local proxy_res, err = httpc:request({
-        method = "POST",
+        method = "GET",
         path = imgproxy_path,
         headers = {
             ["Host"] = "localhost",
-            ["Content-Type"] = mime,
-            ["Content-Length"] = tostring(#body),
-        },
-        body = body,
+        }
     })
 
     if not proxy_res then

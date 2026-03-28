@@ -3,19 +3,9 @@
 -- Accepts raw image bytes in request body, forwards to imgproxy for processing.
 -- Parameters are identical to /img/ (w, h, fit, crop, fmt, q, ignore_exts).
 --
--- Designed for high-concurrency, high-throughput real-time processing:
---   - Reads image entirely from memory (no disk I/O for source)
---   - Forwards to imgproxy via HTTP raw upload mode
---   - imgproxy handles all image processing (resize, crop, format conversion)
---   - No caching (stateless, caller is responsible for caching)
---   - Streams output buffer directly to client
---
--- imgproxy architecture:
---   - imgproxy runs as separate Docker service (imgproxy container)
---   - yot (this service) handles HTTP caching via nginx proxy_cache
---   - imgproxy has built-in cache DISABLED for performance (yot caches instead)
---   - imgproxy reads from shared /data directory for local:// URLs
---   - For raw uploads, image is sent in request body to imgproxy
+-- Architecture note:
+-- imgproxy开源版不支持/raw端点，因此本实现先将上传文件保存到临时目录，
+-- 再通过imgproxy的local:// URL进行处理，最后清理临时文件。
 --
 -- URL:
 --   POST /api/img?w=200&h=150&fit=cover&fmt=webp&q=80
@@ -25,7 +15,7 @@
 --   w            - target width  (pixels)
 --   h            - target height (pixels)
 --   fit          - resize mode: contain (default) | cover | fill | scale
---   crop         - crop before resize: "x,y,width,height"
+--   crop         - crop before resize: "x,y,width,height" (NOT supported yet)
 --   fmt          - output format: jpeg | webp | png | avif | gif
 --   q            - quality 1-100 (jpeg/webp/avif, default 82)
 --   ignore_exts  - comma-separated extensions to skip processing (e.g. "gif,webp")
@@ -51,6 +41,25 @@ local http = require("resty.http")
 
 local IMGPROXY_HOST = os.getenv("IMGPROXY_HOST") or "imgproxy"
 local IMGPROXY_PORT = os.getenv("IMGPROXY_PORT") or "8080"
+-- Use /data/.imgapi-tmp for temp files (shared between yot and imgproxy containers)
+local TMP_DIR = "/data/.imgapi-tmp"
+
+-- Ensure tmp directory exists
+os.execute("mkdir -p " .. TMP_DIR)
+
+-- ── Map fit modes to imgproxy resizing_type ─────────────────────────────────
+
+local function map_resizing_type(fit)
+    if fit == "cover" then
+        return "fill"
+    elseif fit == "fill" then
+        return nil  -- no stretch mode in imgproxy
+    elseif fit == "scale" then
+        return nil  -- no stretch mode in imgproxy
+    else
+        return nil  -- nil means use imgproxy default (fit)
+    end
+end
 
 -- ── Build imgproxy processing string ───────────────────────────────────────
 
@@ -63,9 +72,12 @@ local function build_processing_string(w, h, fit, fmt, q)
     if h and h > 0 then
         table.insert(parts, "height:" .. tostring(h))
     end
-    if fit and fit ~= "contain" then
-        table.insert(parts, "fit:" .. fit)
+
+    local resizing_type = map_resizing_type(fit)
+    if resizing_type then
+        table.insert(parts, "resizing_type:" .. resizing_type)
     end
+
     if fmt and fmt ~= "" then
         -- Normalize jpeg -> jpg for imgproxy
         if fmt == "jpeg" then fmt = "jpg" end
@@ -76,6 +88,76 @@ local function build_processing_string(w, h, fit, fmt, q)
     end
 
     return table.concat(parts, "/")
+end
+
+-- ── Save body to temp file ─────────────────────────────────────────────────
+
+local function save_to_temp_file(body, ext)
+    -- Ensure tmp directory exists
+    os.execute("mkdir -p " .. TMP_DIR)
+
+    local unique_id = ngx.now() * 1000 + math.random(1000)
+    local filename = string.format("%d", unique_id) .. "." .. ext
+    local tmp_path = TMP_DIR .. "/" .. filename
+    local f, err = io.open(tmp_path, "wb")
+    if not f then
+        return nil, "failed to open temp file: " .. tostring(err)
+    end
+    local ok, err = f:write(body)
+    f:close()
+    if not ok then
+        return nil, "failed to write temp file: " .. tostring(err)
+    end
+    -- Return path relative to IMGPROXY_LOCAL_FILESYSTEM_ROOT (/data)
+    return ".imgapi-tmp/" .. filename
+end
+
+-- ── Process via imgproxy ───────────────────────────────────────────────────
+
+local function process_via_imgproxy(tmp_path, processing)
+    local httpc = http.new()
+    httpc:set_timeout(30000)
+
+    local ok, err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
+    if not ok then
+        return nil, "failed to connect to imgproxy: " .. err
+    end
+
+    -- Build imgproxy URL: /insecure/<processing>/plain/local:///<path>
+    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. tmp_path
+
+    local proxy_res, err = httpc:request({
+        method = "GET",
+        path = imgproxy_path,
+        headers = {
+            ["Host"] = "localhost",
+        }
+    })
+
+    if not proxy_res then
+        httpc:close()
+        return nil, "imgproxy request failed: " .. err
+    end
+
+    local res_body, err = proxy_res:read_body()
+    if not res_body then
+        httpc:close()
+        return nil, "failed to read imgproxy response: " .. err
+    end
+
+    httpc:set_keepalive(10000, 64)
+
+    local status = proxy_res.status
+    if status ~= 200 then
+        local err_msg = "imgproxy returned status " .. status .. ": " .. (res_body or "")
+        return nil, err_msg, status
+    end
+
+    return {
+        body = res_body,
+        headers = proxy_res.headers,
+        status = status
+    }
 end
 
 -- ── Main handler ───────────────────────────────────────────────────────────
@@ -137,95 +219,52 @@ function _M.handle()
         return
     end
 
-    -- ── Fast path: no processing params → return body as-is ───────────────
-    -- For raw upload, we still need to send to imgproxy to get proper content-type
-    -- but with no processing extensions
+    -- ── No processing params → return body as-is ────────────────────────────
     if not w and not h and not fmt and not crop_str then
-        -- Still forward to imgproxy for content-type normalization
-        -- but don't apply any processing
+        ngx.header["Content-Type"]   = ct or imgproc.mime_of_ext(src_ext)
+        ngx.header["Content-Length"] = #body
+        ngx.header["X-Imgproxy"]     = "passthrough"
+        ngx.print(body)
+        return
     end
 
-    -- ── Build imgproxy URL ─────────────────────────────────────────────────
-    -- imgproxy raw upload URL format:
-    -- /insecure/<processing>/raw
-    -- The image is sent in the request body
+    -- ── Save body to temp file ──────────────────────────────────────────────
+    local ext = src_ext
+    if ext == "" or ext == "jpeg" then ext = "jpg" end
+
+    local tmp_path, err = save_to_temp_file(body, ext)
+    if not tmp_path then
+        ngx.log(ngx.ERR, "[imgapi] failed to save temp file: ", err)
+        ngx.status = 500
+        ngx.header["Content-Type"] = "application/json; charset=utf-8"
+        ngx.print('{"error":"internal","message":"failed to save temp file"}')
+        return ngx.exit(500)
+    end
+
+    -- ── Build processing string ─────────────────────────────────────────────
     local processing = build_processing_string(w, h, fit, fmt, q)
-    local imgproxy_path = "/insecure/" .. processing .. "/raw"
 
-    -- ── Forward to imgproxy via HTTP ──────────────────────────────────────
-    local httpc = http.new()
-    httpc:set_timeout(30000) -- 30 second timeout
+    -- ── Process via imgproxy ────────────────────────────────────────────────
+    local result, err, err_status = process_via_imgproxy(tmp_path, processing)
 
-    -- Connect to imgproxy
-    local ok, err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
-    if not ok then
-        ngx.log(ngx.ERR, "[imgapi] failed to connect to imgproxy: ", err)
-        ngx.status = 502
+    -- ── Clean up temp file ─────────────────────────────────────────────────
+    os.remove(tmp_path)
+
+    if not result then
+        ngx.log(ngx.ERR, "[imgapi] imgproxy error: ", err)
+        ngx.status = err_status or 502
         ngx.header["Content-Type"] = "application/json; charset=utf-8"
-        ngx.print('{"error":"bad_gateway","message":"imgproxy unavailable"}')
-        return ngx.exit(502)
-    end
-
-    -- Build proxy request
-    local content_type = ct
-    if content_type == "" then
-        content_type = imgproc.mime_of_ext(src_ext)
-    end
-
-    local proxy_req = {
-        method = "POST",
-        path = imgproxy_path,
-        headers = {
-            ["Host"] = "localhost",
-            ["Content-Type"] = content_type,
-            ["Content-Length"] = tostring(#body),
-        },
-        body = body,
-    }
-
-    -- Send request to imgproxy
-    local proxy_res, err = httpc:request(proxy_req)
-    if not proxy_res then
-        ngx.log(ngx.ERR, "[imgapi] imgproxy request failed: ", err)
-        httpc:close()
-        ngx.status = 502
-        ngx.header["Content-Type"] = "application/json; charset=utf-8"
-        ngx.print('{"error":"bad_gateway","message":"imgproxy request failed"}')
-        return ngx.exit(502)
-    end
-
-    -- Read response body
-    local res_body, err = proxy_res:read_body()
-    if not res_body then
-        ngx.log(ngx.ERR, "[imgapi] failed to read imgproxy response: ", err)
-        httpc:close()
-        ngx.status = 502
-        ngx.header["Content-Type"] = "application/json; charset=utf-8"
-        ngx.print('{"error":"bad_gateway","message":"failed to read imgproxy response"}')
-        return ngx.exit(502)
-    end
-
-    -- Keep connection alive for connection pool
-    httpc:set_keepalive(10000, 64)
-
-    -- Check imgproxy response status
-    local status = proxy_res.status
-    if status ~= 200 then
-        ngx.log(ngx.WARN, "[imgapi] imgproxy returned status ", status)
-        ngx.status = 502
-        ngx.header["Content-Type"] = "application/json; charset=utf-8"
-        ngx.print('{"error":"bad_gateway","message":"imgproxy processing failed"}')
-        return ngx.exit(502)
+        ngx.print('{"error":"bad_gateway","message":"' .. ngx.escape_uri(err) .. '"}')
+        return ngx.exit(ngx.status)
     end
 
     -- ── Send response to client ────────────────────────────────────────────
-    local res_headers = proxy_res.headers
     ngx.status = 200
-    ngx.header["Content-Type"]   = res_headers["Content-Type"] or "application/octet-stream"
-    ngx.header["Content-Length"] = #res_body
+    ngx.header["Content-Type"]   = result.headers["Content-Type"] or "application/octet-stream"
+    ngx.header["Content-Length"] = #result.body
     ngx.header["X-Imgproxy"]     = "processed"
     ngx.header["Cache-Control"] = "private, max-age=86400"
-    ngx.print(res_body)
+    ngx.print(result.body)
 end
 
 return _M

@@ -45,7 +45,7 @@ services:
       # Performance-first: disable all caches, maximize workers
       - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/data
       - IMGPROXY_DISABLE_CACHE=true
-      - IMGPROXY_MAX_WORKERS=0              # 0 = auto (use all CPU cores)
+      - IMGPROXY_WORKERS=1                 # 1 = minimal worker, yot handles caching
       - IMGPROXY_CONCURRENCY=0              # 0 = auto (unlimited concurrent operations)
       - IMGPROXY_MAX_SRC_FILESIZE=104857600  # 100MB max source file
       - IMGPROXY_MAX_RESOLUTION=66741696    # 64MP max resolution
