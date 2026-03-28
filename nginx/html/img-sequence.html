@@ -576,11 +576,11 @@ function loadToCanvas(url) {
   });
 }
 
-// Canvas to blob with JPEG quality 0.9 (only affects JPEG; PNG/GIF/WebP are lossless)
+// Canvas to blob with quality 0.9 (only affects JPEG/WebP; PNG/GIF are lossless)
 function canvasToBlob(canvas, mimeType) {
   return new Promise(resolve => {
-    if (mimeType === 'image/jpeg') {
-      canvas.toBlob(resolve, 'image/jpeg', 0.9);
+    if (mimeType === 'image/jpeg' || mimeType === 'image/webp') {
+      canvas.toBlob(resolve, mimeType, 0.9);
     } else {
       canvas.toBlob(resolve, mimeType);
     }
@@ -607,10 +607,10 @@ async function getExportBlob(item) {
     return canvasToBlob(canvas, item.mimeType);
   }
 
-  // Rotation required: draw to canvas with transform, export with JPEG quality 0.9
+  // Rotation required: draw to canvas with transform, always export as WebP
   const { canvas: raw } = await loadToCanvas(item.thumb);
   const rotCanvas = rotatedCanvas(raw, raw.width, raw.height, rot);
-  return canvasToBlob(rotCanvas, item.mimeType);
+  return canvasToBlob(rotCanvas, 'image/webp');
 }
 
 // ═══════════════════════════════════════════════════════════

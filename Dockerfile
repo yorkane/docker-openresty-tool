@@ -105,6 +105,14 @@ RUN set -eux \
     && mkdir -p "${SITELIB}/klib" \
     && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${SITELIB}/klib/" \
     \
+    # Download frontend third-party libs into nginx/html/libs/ (bundled, no CDN at runtime)
+    && mkdir -p /usr/local/openresty/nginx/html/libs \
+    && cd /usr/local/openresty/nginx/html/libs \
+    && wget -q "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" \
+    && wget -q "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js" \
+    && wget -q "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js" \
+    && wget -q "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" \
+    \
     # Copy nginx binary to /usr/local/bin so it's always on PATH
     # Using mv to reduce image size (the original will be removed)
     && mv /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
