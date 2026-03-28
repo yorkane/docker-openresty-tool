@@ -671,9 +671,16 @@ function _M.handle(webdav_root)
         return ngx.exit(400)
     end
 
-    -- Normalise path
+    -- Normalise path: prepend webdav_root if path is not already absolute
+    -- API accepts paths like "/images/vacation" (relative to webdav_root)
+    -- or "images/vacation" (also relative)
+    -- webdav_root is typically "/webdav"
     local abs_path = p.path
-    if abs_path:sub(1,1) ~= "/" then
+    if abs_path:sub(1,1) == "/" then
+        -- Absolute-style path like /images/xxx - prepend webdav_root
+        abs_path = (webdav_root or "") .. abs_path
+    else
+        -- Relative path - prepend webdav_root with /
         abs_path = (webdav_root or "") .. "/" .. abs_path
     end
 

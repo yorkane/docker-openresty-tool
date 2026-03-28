@@ -24,16 +24,14 @@ RUN set -eux \
     # ── Mirror selection ──────────────────────────────────────────────────────
     # USE_CN_MIRROR=1  switches ALL download sources to CN-accessible mirrors:
     #   apk      → USTC (mirrors.ustc.edu.cn)
-    #   luarocks → luarocks.cn  (proxy by API7/APISIX team)
+    #   luarocks → API7 mirror (proxy by APISIX team)
     #   GitHub   → ghfast.top reverse-proxy  (raw + archive downloads)
     # Leave USE_CN_MIRROR empty for international builds.
     # ──────────────────────────────────────────────────────────────────────────
-    && LUAROCKS_SERVER="https://luarocks.org" \
     && GHRAW="https://raw.githubusercontent.com" \
     && GHARCHIVE="https://github.com" \
     && if [ -n "${USE_CN_MIRROR}" ]; then \
     sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories; \
-    LUAROCKS_SERVER="https://luarocks.cn"; \
     GHRAW="https://ghfast.top/https://raw.githubusercontent.com"; \
     GHARCHIVE="https://ghfast.top/https://github.com"; \
     fi \
@@ -54,16 +52,43 @@ RUN set -eux \
     && apk add --no-cache --virtual .build-deps \
         build-base \
         git \
+        wget \
     \
-    # Install LuaRocks packages (--server selects manifest source)
-    && luarocks install luasocket         --server="${LUAROCKS_SERVER}" \
-    && luarocks install luazip            --server="${LUAROCKS_SERVER}" \
-    && luarocks install lua-resty-http    --server="${LUAROCKS_SERVER}" \
-    && luarocks install lua-resty-redis-connector --server="${LUAROCKS_SERVER}" \
-    && luarocks install lua-resty-template --server="${LUAROCKS_SERVER}" \
-    && luarocks install lua-ffi-zlib      --server="${LUAROCKS_SERVER}" \
-    && luarocks install lua-resty-mlcache --server="${LUAROCKS_SERVER}" \
-    && luarocks --tree=/usr/local/openresty/luajit purge --only-not-installed \
+    # ─── lua-resty-mlcache 安装 ───────────────────────────────────────────────
+    # mlcache 依赖: lua-resty-lrucache, lua-resty-signal
+    # 优先尝试 luarocks，失败则手动从 GitHub 安装
+    && LUA_SHARE=/usr/local/openresty/luajit/share/lua/5.1 \
+    && SITELIB=/usr/local/openresty/site/lualib \
+    \
+    # mlcache 需要 lrucache (OpenResty 内置) 和 FFI bindings
+    # 先尝试 luarocks 安装
+    && luarocks install lua-resty-mlcache 2>/dev/null || { \
+        echo "[WARN] luarocks install failed, installing mlcache from GitHub..."; \
+        cd /tmp && rm -rf _mlcache_ && mkdir _mlcache_ && cd _mlcache_; \
+        wget -qO- "${GHARCHIVE}/openresty/lua-resty-mlcache/archive/refs/heads/master.tar.gz" | tar xz -C .; \
+        mkdir -p "${SITELIB}/resty"; \
+        cp lua-resty-mlcache*/lib/resty/mlcache*.lua "${SITELIB}/resty/"; \
+        cd /tmp && rm -rf _mlcache_; \
+        echo "[INFO] mlcache installed from GitHub"; \
+    } \
+    \
+    # ─── 其他 luarocks 包 ────────────────────────────────────────────────────
+    && for PKG in lua-resty-http lua-resty-template lua-ffi-zlib lua-resty-redis-connector; do \
+        luarocks install ${PKG} 2>/dev/null || { \
+            echo "[WARN] luarocks install ${PKG} failed, skipping..."; \
+        }; \
+    done \
+    \
+    # ─── luazip 手动编译 ────────────────────────────────────────────────────
+    # luarocks 安装 luazip 会链接错误，必须手动编译
+    && cd /tmp \
+    && wget -q "${GHARCHIVE}/mpeterv/luazip/archive/refs/heads/master.tar.gz" \
+    && tar xzf master.tar.gz \
+    && cd luazip-master \
+    && gcc -O2 -fPIC -I/usr/local/openresty/luajit/include/luajit-2.1 -c src/luazip.c -o src/luazip.o \
+    && gcc -shared -o zip.so src/luazip.o -L/usr/local/openresty/luajit/lib -lluajit-5.1 -lzzip -Wl,-rpath,/usr/local/openresty/luajit/lib \
+    && cp zip.so /usr/local/openresty/luajit/lib/lua/5.1/zip.so \
+    && cd /tmp && rm -rf luazip-master \
     \
     # NOTE: imgproxy is now deployed as a separate Docker service (see docker-compose.yml).
     # imgproxy handles all image processing. yot connects via HTTP to imgproxy:8080.
