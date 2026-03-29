@@ -97,48 +97,7 @@ local _M = {}
 local ffi      = require("ffi")
 local bit      = require("bit")
 local imgproc  = require("lib.imgproc")
-local http     = require("resty.http")
-
--- ── imgproxy upstream config (supports multiple servers) ───────────────────
-
-local function parse_upstream()
-    local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
-    if not upstream_str or upstream_str == "" then
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
-    end
-
-    local servers = {}
-    for server in upstream_str:gmatch("[^,]+") do
-        server = server:gsub("%s+", "")
-        local host, port = server:match("([^:]+):(%d+)")
-        if host and port then
-            table.insert(servers, {host = host, port = tonumber(port)})
-        else
-            table.insert(servers, {host = server, port = 8080})
-        end
-    end
-
-    if #servers == 0 then
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
-    end
-    return servers
-end
-
-local server_pool = nil
-local pool_index = 0
-
-local function get_next_server()
-    if not server_pool then
-        server_pool = parse_upstream()
-        pool_index = 0
-    end
-    pool_index = (pool_index % #server_pool) + 1
-    return server_pool[pool_index]
-end
+local imgproxy = require("lib.imgproxy")
 
 -- ── FFI: opendir/readdir/stat ──────────────────────────────────────────────
 
@@ -252,52 +211,6 @@ local function write_file(path, data)
     fh:write(data)
     fh:close()
     return true
-end
-
--- ── imgproxy URL builder ────────────────────────────────────────────────────
-
--- Map our fit values to imgproxy resizing_type
--- imgproxy supports: fit (default), fill (crop to fill), crop
--- Our API: contain (fit), cover (fill), fill (no equiv - fallback to fit), scale (fit)
--- Note: imgproxy has NO stretch mode, so fit=fill falls back to default (fit)
-local function map_resizing_type(fit)
-    if fit == "cover" then
-        return "fill"  -- crop to fill, preserve aspect ratio
-    elseif fit == "fill" then
-        return nil  -- no stretch mode in imgproxy, fallback to default (fit)
-    elseif fit == "scale" then
-        return nil  -- same as contain, use default (fit)
-    else
-        return nil  -- nil means use imgproxy default (fit)
-    end
-end
-
--- Build imgproxy processing string from params
-local function build_processing_string(w, h, fit, fmt, q)
-    local parts = {}
-    if w and w > 0 then table.insert(parts, "width:" .. tostring(w)) end
-    if h and h > 0 then table.insert(parts, "height:" .. tostring(h)) end
-
-    local resizing_type = map_resizing_type(fit)
-    if resizing_type then
-        table.insert(parts, "resizing_type:" .. resizing_type)
-    end
-
-    if fmt and fmt ~= "" then
-        if fmt == "jpeg" then fmt = "jpg" end
-        table.insert(parts, "format:" .. fmt)
-    end
-    if q and q > 0 then table.insert(parts, "quality:" .. tostring(q)) end
-    return table.concat(parts, "/")
-end
-
--- Build imgproxy local:// URL for a file path
--- imgproxy LOCAL_FILESYSTEM_ROOT=/, so:
---   /data/images/photo.jpg → rel_path="data/images/photo.jpg" → local:///data/images/photo.jpg
-local function build_imgproxy_url(rel_path, w, h, fit, fmt, q)
-    local processing = build_processing_string(w, h, fit, fmt, q)
-    -- Use triple-slash local:/// to avoid hostname parsing bug
-    return "/insecure/" .. processing .. "/plain/local:///" .. rel_path
 end
 
 -- ── Collect image files from path ──────────────────────────────────────────
@@ -483,7 +396,7 @@ local function process_local_one(src, dst, params, overwrite, webdav_root)
     -- Strip leading slash: "/data/foo.jpg" → "data/foo.jpg" for local:///data/foo.jpg
     local rel_path = abs_path:sub(2)
 
-    local processing = build_processing_string(
+    local processing = imgproxy.build_processing(
         params.w and tonumber(params.w),
         params.h and tonumber(params.h),
         params.fit,
@@ -492,49 +405,19 @@ local function process_local_one(src, dst, params, overwrite, webdav_root)
     )
 
     -- Use local:// URL scheme: /insecure/<processing>/plain/local:///<rel_path>
-    -- imgproxy reads directly from local filesystem (IMGPROXY_LOCAL_FILESYSTEM_ROOT=/data)
-    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
+    local imgproxy_path = imgproxy.build_local_url(rel_path, processing)
 
-    -- Connect to imgproxy and request the processed image
-    local httpc = http.new()
-    httpc:set_timeout(30000)
-
-    local server = get_next_server()
-    local ok, err = httpc:connect(server.host, server.port)
-    if not ok then
-        return false, "imgproxy connect failed: " .. tostring(err)
-    end
-
-    local proxy_res, err = httpc:request({
-        method = "GET",
-        path = imgproxy_path,
-        headers = {
-            ["Host"] = "localhost",
-        }
-    })
-
-    if not proxy_res then
-        httpc:close()
+    -- Use shared imgproxy request function
+    local result, err, status = imgproxy.request(imgproxy_path)
+    if not result then
         return false, "imgproxy request failed: " .. tostring(err)
     end
 
-    local res_body, err = proxy_res:read_body()
-    if not res_body then
-        httpc:close()
-        return false, "imgproxy read body failed: " .. tostring(err)
-    end
-
-    httpc:set_keepalive(10000, 64)
-
-    if proxy_res.status ~= 200 then
-        return false, "imgproxy returned " .. proxy_res.status
-    end
-
-    local wok, werr = write_file(dst, res_body)
+    local wok, werr = write_file(dst, result.body)
     if not wok then return false, werr end
 
     local ms = math.floor((ngx.now() - t0) * 1000)
-    return true, { src=src, dst=dst, size_in=sz_in, size_out=#res_body, ms=ms }
+    return true, { src=src, dst=dst, size_in=sz_in, size_out=#result.body, ms=ms }
 end
 
 -- ── Remote processing (HTTP/1.1 to remote /api/img) ───────────────────────

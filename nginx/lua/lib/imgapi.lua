@@ -40,51 +40,9 @@
 local _M = {}
 
 local imgproc = require("lib.imgproc")
-local http = require("resty.http")
+local imgproxy = require("lib.imgproxy")
 
 -- ── Config ─────────────────────────────────────────────────────────────────
-
--- Upstream pool configuration (supports multiple imgproxy servers)
--- IMGPROXY_UPSTREAM: comma-separated list of host:port (e.g., "imgproxy1:8080,imgproxy2:8080")
--- Falls back to IMGPROXY_HOST:IMGPROXY_PORT if not set
-local function parse_upstream()
-    local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
-    if not upstream_str or upstream_str == "" then
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
-    end
-
-    local servers = {}
-    for server in upstream_str:gmatch("[^,]+") do
-        server = server:gsub("%s+", "")
-        local host, port = server:match("([^:]+):(%d+)")
-        if host and port then
-            table.insert(servers, {host = host, port = tonumber(port)})
-        else
-            table.insert(servers, {host = server, port = 8080})
-        end
-    end
-
-    if #servers == 0 then
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
-    end
-    return servers
-end
-
-local server_pool = nil
-local pool_index = 0
-
-local function get_next_server()
-    if not server_pool then
-        server_pool = parse_upstream()
-        pool_index = 0
-    end
-    pool_index = (pool_index % #server_pool) + 1
-    return server_pool[pool_index]
-end
 
 -- RAM Disk Bridge for zero disk I/O:
 --   yot container:      writes to /mnt/ramdisk/.imgapi-tmp/ (shared named tmpfs volume)
@@ -98,46 +56,11 @@ os.execute("mkdir -p " .. TMP_DIR .. " && chmod 1777 " .. TMP_DIR)
 
 -- ── Map fit modes to imgproxy resizing_type ─────────────────────────────────
 
-local function map_resizing_type(fit)
-    if fit == "cover" then
-        return "fill"
-    elseif fit == "fill" then
-        return nil  -- no stretch mode in imgproxy
-    elseif fit == "scale" then
-        return nil  -- no stretch mode in imgproxy
-    else
-        return nil  -- nil means use imgproxy default (fit)
-    end
-end
+-- Note: uses imgproxy.map_resizing_type from the shared library
 
 -- ── Build imgproxy processing string ───────────────────────────────────────
 
-local function build_processing_string(w, h, fit, fmt, q)
-    local parts = {}
-
-    if w and w > 0 then
-        table.insert(parts, "width:" .. tostring(w))
-    end
-    if h and h > 0 then
-        table.insert(parts, "height:" .. tostring(h))
-    end
-
-    local resizing_type = map_resizing_type(fit)
-    if resizing_type then
-        table.insert(parts, "resizing_type:" .. resizing_type)
-    end
-
-    if fmt and fmt ~= "" then
-        -- Normalize jpeg -> jpg for imgproxy
-        if fmt == "jpeg" then fmt = "jpg" end
-        table.insert(parts, "format:" .. fmt)
-    end
-    if q and q > 0 then
-        table.insert(parts, "quality:" .. tostring(q))
-    end
-
-    return table.concat(parts, "/")
-end
+-- Note: uses imgproxy.build_processing from the shared library
 
 -- ── Save body to temp file ─────────────────────────────────────────────────
 
@@ -167,52 +90,8 @@ end
 -- ── Process via imgproxy ───────────────────────────────────────────────────
 
 local function process_via_imgproxy(rel_path, processing)
-    local httpc = http.new()
-    httpc:set_timeout(30000)
-
-    local server = get_next_server()
-    local ok, err = httpc:connect(server.host, server.port)
-    if not ok then
-        return nil, "failed to connect to imgproxy: " .. err
-    end
-
-    -- Build imgproxy URL: /insecure/<processing>/plain/local:///<rel_path>
-    -- rel_path is relative to imgproxy's LOCAL_FILESYSTEM_ROOT (/data):
-    --   "ramdisk/.imgapi-tmp/xxx.png" → imgproxy reads /data/ramdisk/.imgapi-tmp/xxx.png
     local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
-
-    local proxy_res, err = httpc:request({
-        method = "GET",
-        path = imgproxy_path,
-        headers = {
-            ["Host"] = "localhost",
-        }
-    })
-
-    if not proxy_res then
-        httpc:close()
-        return nil, "imgproxy request failed: " .. err
-    end
-
-    local res_body, err = proxy_res:read_body()
-    if not res_body then
-        httpc:close()
-        return nil, "failed to read imgproxy response: " .. err
-    end
-
-    httpc:set_keepalive(10000, 64)
-
-    local status = proxy_res.status
-    if status ~= 200 then
-        local err_msg = "imgproxy returned status " .. status .. ": " .. (res_body or "")
-        return nil, err_msg, status
-    end
-
-    return {
-        body = res_body,
-        headers = proxy_res.headers,
-        status = status
-    }
+    return imgproxy.request(imgproxy_path)
 end
 
 -- ── Main handler ───────────────────────────────────────────────────────────
@@ -297,7 +176,7 @@ function _M.handle()
     end
 
     -- ── Build processing string ─────────────────────────────────────────────
-    local processing = build_processing_string(w, h, fit, fmt, q)
+    local processing = imgproxy.build_processing(w, h, fit, fmt, q)
 
     -- ── Process via imgproxy ────────────────────────────────────────────────
     local result, imgproxy_err, err_status = process_via_imgproxy(rel_path, processing)

@@ -238,46 +238,6 @@ end
 -- imgproxy reads from /mnt/ramdisk/ (same volume mounted)
 -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:///mnt/ramdisk/.imgapi-tmp/file → /mnt/ramdisk/.imgapi-tmp/file
 
--- imgproxy upstream config (supports multiple servers)
-local function parse_upstream()
-    local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
-    if not upstream_str or upstream_str == "" then
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
-    end
-
-    local servers = {}
-    for server in upstream_str:gmatch("[^,]+") do
-        server = server:gsub("%s+", "")
-        local host, port = server:match("([^:]+):(%d+)")
-        if host and port then
-            table.insert(servers, {host = host, port = tonumber(port)})
-        else
-            table.insert(servers, {host = server, port = 8080})
-        end
-    end
-
-    if #servers == 0 then
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
-    end
-    return servers
-end
-
-local server_pool = nil
-local pool_index = 0
-
-local function get_next_server()
-    if not server_pool then
-        server_pool = parse_upstream()
-        pool_index = 0
-    end
-    pool_index = (pool_index % #server_pool) + 1
-    return server_pool[pool_index]
-end
-
 local TMP_DIR         = "/mnt/ramdisk/.imgapi-tmp"
 local TMP_REL_DIR     = "mnt/ramdisk/.imgapi-tmp"  -- no leading / for imgproxy local:// URL
 
@@ -311,7 +271,7 @@ end
 -- 3. Return result and cleanup temp file
 -- Returns: result {body, headers}, err, status
 local function process_image_via_api(img_data, opts, ext)
-    local http = require("resty.http")
+    local imgproxy = require("lib.imgproxy")
 
     -- Normalize extension
     ext = ext or "jpg"
@@ -323,76 +283,27 @@ local function process_image_via_api(img_data, opts, ext)
         return nil, "failed to save temp file: " .. err, 500
     end
 
-    -- Build processing string
-    local parts = {}
-    if opts.w and opts.w > 0 then
-        table.insert(parts, "width:" .. tostring(opts.w))
-    end
-    if opts.h and opts.h > 0 then
-        table.insert(parts, "height:" .. tostring(opts.h))
-    end
-    if opts.fit == "cover" then
-        table.insert(parts, "resizing_type:fill")
-    elseif opts.fit == "fill" then
-        -- imgproxy doesn't support stretch, use default
-    end
-    if opts.fmt and opts.fmt ~= "" then
-        local fmt = opts.fmt
-        if fmt == "jpeg" then fmt = "jpg" end
-        table.insert(parts, "format:" .. fmt)
-    end
-    if opts.q and opts.q > 0 then
-        table.insert(parts, "quality:" .. tostring(opts.q))
-    end
-    local processing = table.concat(parts, "/")
+    -- Build processing string using shared library
+    local processing = imgproxy.build_processing(
+        opts.w, opts.h, opts.fit, opts.fmt, opts.q
+    )
 
     -- Build imgproxy URL with local:// scheme pointing to ramdisk
-    -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:///mnt/ramdisk/.imgapi-tmp/file → /mnt/ramdisk/.imgapi-tmp/file
-    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
+    local imgproxy_path = imgproxy.build_local_url(rel_path, processing)
 
-    local httpc = http.new()
-    httpc:set_timeout(30000)
-
-    local server = get_next_server()
-    local ok, conn_err = httpc:connect(server.host, server.port)
-    if not ok then
-        os.remove(abs_path)
-        return nil, "failed to connect to imgproxy: " .. tostring(conn_err), 502
-    end
-
-    local proxy_res, perr = httpc:request({
-        method = "GET",
-        path = imgproxy_path,
-        headers = {
-            ["Host"] = "localhost",
-        }
-    })
-
-    if not proxy_res then
-        httpc:close()
-        os.remove(abs_path)
-        return nil, "imgproxy request failed: " .. tostring(perr), 502
-    end
-
-    local res_body, rerr = proxy_res:read_body()
-    if not res_body then
-        httpc:close()
-        os.remove(abs_path)
-        return nil, "failed to read imgproxy response: " .. tostring(rerr), 502
-    end
-
-    httpc:set_keepalive(10000, 64)
+    -- Use shared imgproxy request function
+    local result, req_err, status = imgproxy.request(imgproxy_path)
 
     -- Cleanup temp file
     os.remove(abs_path)
 
-    if proxy_res.status ~= 200 then
-        return nil, "imgproxy returned " .. proxy_res.status, proxy_res.status
+    if not result then
+        return nil, req_err or "imgproxy request failed", status or 502
     end
 
     return {
-        body = res_body,
-        headers = proxy_res.headers,
+        body = result.body,
+        headers = result.headers,
     }, nil, 200
 end
 
