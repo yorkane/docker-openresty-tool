@@ -1,7 +1,7 @@
 version: "3"
 services:
   yot:
-    image: yot:test
+    image: ghcr.io/yorkane/docker-openresty-tool:latest
     container_name: yot
     environment:
       - NGX_OVERWRITE_CONFIG=true

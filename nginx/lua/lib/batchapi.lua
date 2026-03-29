@@ -717,7 +717,15 @@ function _M.handle(webdav_root)
         q    = p.q    and tostring(p.q)    or nil,
     }
 
-    local out_dir    = p.out_dir
+    -- Normalize out_dir: prepend webdav_root if provided (same logic as abs_path)
+    local out_dir = p.out_dir
+    if out_dir and out_dir ~= "" then
+        if out_dir:sub(1,1) == "/" then
+            out_dir = (webdav_root or "") .. out_dir
+        else
+            out_dir = (webdav_root or "") .. "/" .. out_dir
+        end
+    end
     local out_suffix = p.out_suffix
     local overwrite  = (p.overwrite ~= false)
 
