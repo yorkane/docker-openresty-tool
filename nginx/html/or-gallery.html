@@ -809,6 +809,46 @@ const Settings = {
 Settings.load();
 
 /* ═══════════════════════════════════════════════════
+   READER POSITION  (persisted in localStorage)
+═══════════════════════════════════════════════════ */
+const ReaderPosition = {
+  _KEY: 'or-gallery-reader-pos',
+
+  /** Get saved position for a gallery path */
+  get(path) {
+    try {
+      const all = JSON.parse(localStorage.getItem(this._KEY) || '{}');
+      return all[path] ?? null;
+    } catch { return null; }
+  },
+
+  /** Save current position for a gallery path */
+  save(path, idx) {
+    try {
+      const all = JSON.parse(localStorage.getItem(this._KEY) || '{}');
+      all[path] = idx;
+      // Limit stored entries to 100 galleries
+      const keys = Object.keys(all);
+      if (keys.length > 100) {
+        // Remove oldest entries (first N keys)
+        const toRemove = keys.slice(0, keys.length - 100);
+        toRemove.forEach(k => delete all[k]);
+      }
+      localStorage.setItem(this._KEY, JSON.stringify(all));
+    } catch {}
+  },
+
+  /** Clear saved position for a gallery path */
+  clear(path) {
+    try {
+      const all = JSON.parse(localStorage.getItem(this._KEY) || '{}');
+      delete all[path];
+      localStorage.setItem(this._KEY, JSON.stringify(all));
+    } catch {}
+  },
+};
+
+/* ═══════════════════════════════════════════════════
    GALLERIZE CONTROLLER
 ═══════════════════════════════════════════════════ */
 const Gallerize = {
@@ -1896,7 +1936,9 @@ const Reader = {
     this._viewMode = Settings.get('viewMode');
     this._scale = 1.0;   // reset zoom on each open
     this._images = [];
-    this._idx = 0;
+    // Restore saved reader position for this gallery
+    const savedIdx = ReaderPosition.get(path);
+    this._idx = savedIdx ?? 0;
     // Clear cache for new album
     this._imgCache.clear();
 
@@ -1955,6 +1997,8 @@ const Reader = {
   },
 
   close() {
+    // Save current reader position before closing
+    if (this._path) ReaderPosition.save(this._path, this._idx);
     this.el.classList.remove('active');
     document.getElementById('gallery-view').classList.remove('hidden');
     document.getElementById('toolbar').style.display = '';
@@ -2116,31 +2160,28 @@ const Reader = {
 
     // ── Orig-mode interaction on image ─────────────────────────────
     if (this._viewMode === 'orig') {
+      // Mouse hover: just moving over the image scrolls it
+      img.addEventListener('mouseenter', e => {
+        if (!this.canvas.classList.contains('orig')) return;
+        // Capture pointer to track movement even if mouse leaves briefly
+        img.setPointerCapture(e.pointerId);
+      });
+
+      img.addEventListener('mousemove', e => {
+        if (!this.canvas.classList.contains('orig')) return;
+        // Scroll canvas based on mouse movement delta
+        this.canvas.scrollLeft += e.movementX;
+        this.canvas.scrollTop += e.movementY;
+      });
+
       // Wheel: scroll canvas (pan) when hovering over image
       img.addEventListener('wheel', e => {
         if (!this.canvas.classList.contains('orig')) return;
-        // Prevent page scroll, but scroll the canvas
         e.preventDefault();
         this.canvas.scrollLeft += e.deltaX || e.deltaY;
       }, { passive: false });
 
-      // Mouse drag on image to pan
-      img.addEventListener('mousedown', e => {
-        if (!this.canvas.classList.contains('orig') || e.button !== 0) return;
-        e.preventDefault();
-        this._drag = {
-          active: true,
-          startX: e.clientX,
-          startY: e.clientY,
-          scrollLeft: this.canvas.scrollLeft,
-          scrollTop: this.canvas.scrollTop,
-          moved: false,
-          source: 'img'  // track source for click detection
-        };
-        this.canvas.style.cursor = 'grabbing';
-      });
-
-      // Touch drag on image
+      // Touch drag on image (still needed for touch devices)
       img.addEventListener('touchstart', e => {
         if (!this.canvas.classList.contains('orig') || e.touches.length !== 1) return;
         const t = e.touches[0];
@@ -2207,13 +2248,20 @@ const Reader = {
     const newIdx = this._idx + (this._rtl ? -delta : delta) * step;
     if (newIdx < 0 || newIdx >= this._images.length) return;
     this._idx = newIdx;
+    // Save position for this gallery
+    if (this._path) ReaderPosition.save(this._path, this._idx);
     this._renderPage(delta);  // pass direction for smart preload
   },
 
-  gotoFirst() { this._idx = 0; this._renderPage(1); },
+  gotoFirst() {
+    this._idx = 0;
+    if (this._path) ReaderPosition.save(this._path, this._idx);
+    this._renderPage(1);
+  },
   gotoLast() {
     const step = this._double ? 2 : 1;
     this._idx = Math.max(0, this._images.length - step);
+    if (this._path) ReaderPosition.save(this._path, this._idx);
     this._renderPage(-1);
   },
 
