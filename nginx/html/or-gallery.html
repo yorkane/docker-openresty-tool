@@ -256,6 +256,61 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   transform-origin: center;
 }
 
+/* Thumb mode: grid of thumbnails */
+#page-canvas.thumb {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  align-content: start;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--bg);
+}
+#page-canvas.thumb .page-img-wrap {
+  position: relative;
+  width: 100%;
+  padding-bottom: 100%;
+  background: var(--bg2);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color .15s, transform .15s;
+}
+#page-canvas.thumb .page-img-wrap:hover {
+  border-color: var(--accent);
+  transform: scale(1.02);
+}
+#page-canvas.thumb .page-img-wrap.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(126, 184, 247, 0.4);
+}
+#page-canvas.thumb .page-img-wrap img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  user-select: none; -webkit-user-drag: none;
+}
+#page-canvas.thumb .page-img-wrap .del-btn {
+  position: absolute; top: 4px; right: 4px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: rgba(0,0,0,.65); border: 1px solid rgba(255,255,255,.25);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; cursor: pointer; opacity: 0; transition: opacity .15s;
+  z-index: 3; color: #fff; line-height: 1;
+}
+#page-canvas.thumb .page-img-wrap:hover .del-btn { opacity: 1; }
+#page-canvas.thumb .page-img-wrap .del-btn:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+#page-canvas.thumb .page-img-wrap .page-num {
+  position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: rgba(255,255,255,.85);
+  background: rgba(0,0,0,.5); border-radius: 3px;
+  padding: 1px 5px; pointer-events: none;
+}
+
 /* double page */
 #page-canvas.double { gap: 0; }
 #page-canvas.double .page-img-wrap.fit { width: 50%; height: 100%; }
@@ -461,6 +516,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <button class="btn" id="rbtn-double" title="单/双页">单页</button>
       <button class="btn" id="rbtn-rtl" title="翻页方向">LTR→</button>
       <button class="btn" id="rbtn-view" title="视图模式 (O)">Fit</button>
+      <button class="btn" id="rbtn-thumb" title="缩略图 (T)">📷</button>
       <button class="btn" id="rbtn-rotate" title="旋转 (V)">🔄</button>
       <span id="page-info" style="color:#ccc;font-size:12px;flex:1;text-align:center;white-space:nowrap;overflow:hidden"></span>
       <button class="btn" id="rbtn-fs" title="全屏 (F)">⛶</button>
@@ -1690,7 +1746,7 @@ const Reader = {
   _isZip: false,
   _images: [],          // [{name, url}]
   _idx: 0,              // current index (left page in double mode)
-  _viewMode: 'fit',     // fit | orig | rotate
+  _viewMode: 'fit',     // fit | orig | rotate | thumb
   _double: false,
   _rtl: false,
   _toolbarTimer: null,
@@ -1831,6 +1887,7 @@ const Reader = {
     document.getElementById('rbtn-double').onclick = () => this.toggleDouble();
     document.getElementById('rbtn-rtl').onclick = () => this.toggleRtl();
     document.getElementById('rbtn-view').onclick = () => this.cycleViewMode();
+    document.getElementById('rbtn-thumb').onclick = () => this.toggleThumb();
     document.getElementById('rbtn-rotate').onclick = () => this.toggleRotate();
     document.getElementById('rbtn-fs').onclick = () => this.toggleFullscreen();
     document.getElementById('rbtn-del').onclick = () => this.deleteCurrentPage();
@@ -2083,6 +2140,9 @@ const Reader = {
     if (this._viewMode === 'orig') {
       this.canvas.classList.add('orig');
       this.canvas.style.cursor = 'grab';
+    } else if (this._viewMode === 'thumb') {
+      this.canvas.classList.add('thumb');
+      this.canvas.style.cursor = '';
     } else {
       this.canvas.style.cursor = '';
     }
@@ -2093,6 +2153,14 @@ const Reader = {
     // can be sized width=canvasH, height=canvasW before rotation,
     // making it visually fill the canvas after rotate(90deg).
     if (this._viewMode === 'rotate') this._updateRotateVars();
+
+    // Thumb mode: show all images in a grid
+    if (this._viewMode === 'thumb') {
+      this._images.forEach((_, idx) => this._appendThumbImg(idx));
+      this._updatePageInfo();
+      this._showToolbar(true);
+      return;
+    }
 
     const count = this._double ? 2 : 1;
     for (let i = 0; i < count; i++) {
@@ -2213,6 +2281,90 @@ const Reader = {
     this.canvas.appendChild(wrap);
   },
 
+  _appendThumbImg(idx) {
+    const item = this._images[idx];
+    const wrap = document.createElement('div');
+    wrap.className = 'page-img-wrap';
+    wrap.dataset.idx = idx;
+
+    // Highlight current page
+    if (idx === this._idx) wrap.classList.add('active');
+
+    // Show loading indicator
+    const loadingIndicator = document.createElement('div');
+    loadingIndicator.className = 'spinner';
+    loadingIndicator.style.cssText = 'width:24px;height:24px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);opacity:0.7;';
+    wrap.appendChild(loadingIndicator);
+
+    const img = document.createElement('img');
+    img.alt = item.name;
+    img.draggable = false;
+
+    // Use cached image if available
+    const entry = this._getCachedImg(item.url);
+    if (entry.loaded) {
+      img.src = item.url;
+      loadingIndicator.style.display = 'none';
+    } else {
+      this._loadImg(item.url).then(() => {
+        loadingIndicator.style.display = 'none';
+      }).catch(() => {});
+      img.src = item.url;
+    }
+
+    img.onerror = () => {
+      loadingIndicator.innerHTML = '⚠️';
+      loadingIndicator.className = '';
+      loadingIndicator.style.cssText = 'font-size:18px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);';
+    };
+
+    // Page number badge
+    const pageNum = document.createElement('div');
+    pageNum.className = 'page-num';
+    pageNum.textContent = idx + 1;
+    wrap.appendChild(pageNum);
+
+    // Delete button (only for non-zip)
+    if (!this._isZip) {
+      const delBtn = document.createElement('div');
+      delBtn.className = 'del-btn';
+      delBtn.textContent = '✕';
+      delBtn.title = '删除';
+      delBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        if (!window.confirm(`删除图片\n\n删除 "${item.name}"？此操作不可撤销。`)) return;
+        const fileDir = item._path || this._path;
+        const filePath = joinPath(fileDir, item.name);
+        try {
+          await apiRm(filePath);
+          this._images.splice(idx, 1);
+          if (this._idx >= this._images.length) {
+            this._idx = Math.max(0, this._images.length - 1);
+          }
+          this._renderPage();
+          showOsd('已删除');
+        } catch (err) {
+          showOsd('删除失败: ' + err.message, 3000);
+        }
+      });
+      wrap.appendChild(delBtn);
+    }
+
+    // Click to navigate to this image
+    wrap.addEventListener('click', () => {
+      this._idx = idx;
+      if (this._path) ReaderPosition.save(this._path, this._idx);
+      // Switch back to fit mode
+      this._viewMode = 'fit';
+      Settings.set('viewMode', 'fit');
+      this._syncButtons();
+      this._renderPage();
+    });
+
+    wrap.appendChild(img);
+    this.canvas.appendChild(wrap);
+  },
+
   /** Apply current _scale to all orig-mode page wraps */
   _applyScale() {
     this.canvas.querySelectorAll('.page-img-wrap.orig').forEach(wrap => {
@@ -2280,12 +2432,23 @@ const Reader = {
   },
 
   cycleViewMode() {
-    const modes = ['fit', 'orig'];
+    const modes = ['fit', 'orig', 'thumb'];
     const next = modes[(modes.indexOf(this._viewMode) + 1) % modes.length];
     this._viewMode = next;
     // Reset zoom when entering orig mode
     if (next === 'orig') this._scale = 1.0;
     Settings.set('viewMode', next);
+    this._syncButtons();
+    this._renderPage(0);
+  },
+
+  toggleThumb() {
+    if (this._viewMode === 'thumb') {
+      this._viewMode = 'fit';
+    } else {
+      this._viewMode = 'thumb';
+    }
+    Settings.set('viewMode', this._viewMode);
     this._syncButtons();
     this._renderPage(0);
   },
@@ -2355,9 +2518,12 @@ const Reader = {
     document.getElementById('rbtn-double').classList.toggle('active', this._double);
     document.getElementById('rbtn-rtl').textContent = this._rtl ? '←RTL' : 'LTR→';
     document.getElementById('rbtn-rtl').classList.toggle('active', this._rtl);
-    document.getElementById('rbtn-view').textContent = this._viewMode === 'orig' ? 'Orig' : 'Fit';
+    document.getElementById('rbtn-view').textContent = this._viewMode === 'thumb' ? 'Fit' : (this._viewMode === 'orig' ? 'Orig' : 'Fit');
     document.getElementById('rbtn-view').classList.toggle('active', this._viewMode === 'orig');
+    document.getElementById('rbtn-thumb').classList.toggle('active', this._viewMode === 'thumb');
     document.getElementById('rbtn-rotate').classList.toggle('active', this._viewMode === 'rotate');
+    // Hide delete button in thumb mode (each thumb has its own delete)
+    document.getElementById('rbtn-del').style.display = this._viewMode === 'thumb' ? 'none' : '';
   },
 
   _showToolbar(force = false) {
@@ -2463,6 +2629,9 @@ document.addEventListener('keydown', e => {
         break;
       case 'o': case 'O':
         Reader.cycleViewMode();
+        break;
+      case 't': case 'T':
+        Reader.toggleThumb();
         break;
       case 'v': case 'V':
         Reader.toggleRotate();
