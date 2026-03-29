@@ -48,6 +48,8 @@ services:
     container_name: ${IMGPROXY_CONTAINER_NAME:-imgproxy}
     platform: linux/amd64
     environment:
+      # External port (used for healthcheck and reference)
+      - IMGPROXY_PORT=${IMGPROXY_EXTERNAL_PORT:-5081}
       # Filesystem access (ROOT=/ allows imgproxy to access any absolute path)
       #   local:///data/images/photo.jpg → /data/images/photo.jpg (webdav files)
       #   local:///mnt/ramdisk/.imgapi-tmp/x.jpg → /mnt/ramdisk/.imgapi-tmp/x.jpg (POST uploads)
@@ -75,6 +77,8 @@ services:
       # RAM disk for imgproxy temp files
       - ramdisk:/mnt/ramdisk
     restart: unless-stopped
+    ports:
+      - "${IMGPROXY_EXTERNAL_PORT:-5081}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
       interval: 30s
