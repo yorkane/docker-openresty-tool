@@ -200,6 +200,31 @@ function _M.request(imgproxy_path, timeout_ms)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Content-type Detection (for files with wrong extensions like .jfif that are actually WebP)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Detect actual image format from file content (first 12 bytes)
+-- Returns: "webp", "jpeg", "png", "gif", or nil
+function _M.detect_content_type(file_path)
+    local f, err = io.open(file_path, "rb")
+    if not f then return nil end
+    local data = f:read(12)
+    f:close()
+    if not data or #data < 12 then return nil end
+    -- PNG: 89 50 4E 47
+    if data:byte(1) == 0x89 and data:sub(2, 5) == "PNG" then return "png" end
+    -- JPEG: FF D8 FF
+    if data:byte(1) == 0xFF and data:byte(2) == 0xD8 and data:byte(3) == 0xFF then return "jpeg" end
+    -- GIF87a
+    if data:sub(1, 6) == "GIF87a" then return "gif" end
+    -- GIF89a
+    if data:sub(1, 6) == "GIF89a" then return "gif" end
+    -- RIFF....WEBP (both lossless and lossy WebP)
+    if data:sub(1, 4) == "RIFF" and data:sub(9, 12) == "WEBP" then return "webp" end
+    return nil
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Convenience wrappers for common patterns
 -- ─────────────────────────────────────────────────────────────────────────────
 
@@ -231,6 +256,18 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav)
         else
             full_rel = rel_path
         end
+
+        -- Detect actual content type to handle files with wrong extensions (e.g., .jfif that's actually WebP)
+        -- imgproxy uses the file extension to determine how to DECODE the source image,
+        -- so .jfif containing WebP data would fail. Fix by using .webp extension when content is WebP.
+        local detected = _M.detect_content_type("/" .. full_rel)
+        if detected == "webp" then
+            -- Replace extension with .webp so imgproxy decodes it correctly
+            full_rel = full_rel:gsub("%.[^.]+$", ".webp")
+        elseif detected == "jpeg" then
+            full_rel = full_rel:gsub("%.[^.]+$", ".jpg")
+        end
+
         imgproxy_path = _M.build_local_url(full_rel, processing)
     end
 
