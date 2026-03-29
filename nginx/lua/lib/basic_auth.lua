@@ -6,6 +6,71 @@ if not ok then
 end
 
 local _M = {}
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- IP Range Matching (CIDR support)
+-- ─────────────────────────────────────────────────────────────────────────────
+local function parse_cidr(cidr)
+    local ip, mask = cidr:match("([^/]+)/(%d+)")
+    if ip and mask then
+        return ip, tonumber(mask)
+    end
+    return cidr, 32  -- single IP, /32
+end
+
+local function ip_to_number(ip)
+    local parts = {}
+    for part in ip:gmatch("%d+") do
+        table.insert(parts, tonumber(part))
+    end
+    if #parts ~= 4 then return nil end
+    return (parts[1] * 16777216) + (parts[2] * 65536) + (parts[3] * 256) + parts[4]
+end
+
+local function match_ip(cidr, client_ip)
+    local ip, mask = parse_cidr(cidr)
+    local ip_num = ip_to_number(ip)
+    local client_num = ip_to_number(client_ip)
+    if not ip_num or not client_num then return false end
+    local mask_bits = 0xFFFFFFFF << (32 - mask)
+    return (ip_num & mask_bits) == (client_num & mask_bits)
+end
+
+-- Check if client IP is in the whitelist (comma-separated IPs/IP ranges)
+local function is_ip_whitelisted(client_ip, whitelist_str)
+    if not whitelist_str or whitelist_str == "" then
+        return false
+    end
+    local arr = split(whitelist_str, ' *, *', 'jo')
+    for i = 1, #arr do
+        local cidr = arr[i]:gsub("%s+", "")
+        if cidr ~= "" and match_ip(cidr, client_ip) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Parse IMGPROXY_UPSTREAM and extract IPs for automatic whitelist
+local function get_imgproxy_upstream_ips()
+    local upstream = os.getenv("IMGPROXY_UPSTREAM") or ""
+    if upstream == "" then
+        return ""
+    end
+    local ips = {}
+    for server in upstream:gmatch("[^,]+") do
+        server = server:gsub("%s+", "")
+        local host, port = server:match("([^:]+):(%d+)")
+        if host then
+            -- Skip Docker service names (no dots = likely internal name)
+            if host:match("%.") then
+                table.insert(ips, host)
+            end
+        end
+    end
+    return table.concat(ips, ",")
+end
+
 local function set_resp(status, err)
     ngx.status = status
     ngx.print(err)
@@ -77,6 +142,24 @@ function _M.handle(conf)
 
     local ip = ngx.var.http_x_forwarded_for or ngx.var.remote_addr
     local ua = ngx.req.get_headers(100)[conf.auth_key or 'x-bakey'] or 0
+
+    -- Build effective IP whitelist: OR_AUTH_IP_WHITELIST + IMGPROXY_UPSTREAM IPs
+    local whitelist = os.getenv("OR_AUTH_IP_WHITELIST") or ""
+    local upstream_ips = get_imgproxy_upstream_ips()
+    if upstream_ips ~= "" then
+        if whitelist ~= "" then
+            whitelist = whitelist .. "," .. upstream_ips
+        else
+            whitelist = upstream_ips
+        end
+    end
+
+    -- Check whitelist first (whitelisted IPs skip auth)
+    if is_ip_whitelisted(ip, whitelist) then
+        return ip
+    end
+
+    -- Check explicit IP allow/deny rules
     if ip == '127.0.0.1' or conf.ip[ip] == 1 then
         return ip
     end
