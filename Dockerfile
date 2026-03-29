@@ -47,6 +47,7 @@ RUN set -eux \
         gnu-libiconv \
         libarchive-tools \
         zziplib-dev \
+        openssl-dev \
     \
     # Build deps only needed for lua C extension compilation
     && apk add --no-cache --virtual .build-deps \
@@ -119,6 +120,18 @@ RUN set -eux \
     && mkdir -p "${SITELIB}/klib" \
     && cp -r _tmp_/lua-resty-klib-main/lib/klib/. "${SITELIB}/klib/" \
     \
+    # ─── lua-resty-openssl 安装 ────────────────────────────────────────────────
+    # lua-resty-http 0.17+ 依赖 lua-resty-openssl 用于 mTLS 支持
+    # 需要完整的目录结构 (resty/openssl/x509/, resty/openssl/auxiliary/)
+    && rm -rf _tmp_ && mkdir _tmp_ && cd _tmp_ \
+    && wget -qO- "${GHARCHIVE}/fffonion/lua-resty-openssl/archive/refs/heads/master.tar.gz" \
+    | tar xz -C . \
+    && mkdir -p "${SITELIB}/resty/openssl" \
+    && cp -r lua-resty-openssl-master/lib/resty/openssl/. "${SITELIB}/resty/openssl/" \
+    && cp lua-resty-openssl-master/lib/resty/openssl/*.lua "${SITELIB}/resty/" \
+    && cd /tmp && rm -rf _tmp_ \
+    \
+    
     # Download frontend third-party libs into nginx/html/libs/ (bundled, no CDN at runtime)
     && mkdir -p /usr/local/openresty/nginx/html/libs \
     && cd /usr/local/openresty/nginx/html/libs \
