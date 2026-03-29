@@ -23,8 +23,6 @@ services:
       # Supports multiple upstream servers via IMGPROXY_UPSTREAM env var:
       #   IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
       # Uses round-robin load balancing across servers.
-      - IMGPROXY_HOST=${IMGPROXY_HOST:-imgproxy}
-      - IMGPROXY_PORT=${IMGPROXY_PORT:-8080}
       - IMGPROXY_UPSTREAM=${IMGPROXY_UPSTREAM:-}
       # Basic auth (optional): format "username:password"
       - OR_AUTH_USER=${OR_AUTH_USER:-}

@@ -19,13 +19,13 @@ local http = require("resty.http")
 
 -- Parse IMGPROXY_UPSTREAM env var (comma-separated list of host:port)
 -- Returns: array of {host, port} tables
+-- If IMGPROXY_UPSTREAM is not set, uses default imgproxy:8080
 local function parse_upstream()
     local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
+
+    -- Default: single server using Docker Compose service name
     if not upstream_str or upstream_str == "" then
-        -- Fallback to single server mode
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
+        return {{host = "imgproxy", port = 8080}}
     end
 
     local servers = {}
@@ -41,9 +41,7 @@ local function parse_upstream()
     end
 
     if #servers == 0 then
-        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-        local port = os.getenv("IMGPROXY_PORT") or "8080"
-        return {{host = host, port = tonumber(port)}}
+        return {{host = "imgproxy", port = 8080}}
     end
 
     return servers

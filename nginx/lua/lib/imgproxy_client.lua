@@ -4,7 +4,7 @@
 --
 -- Supports multiple upstream servers via IMGPROXY_UPSTREAM env var:
 --   IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
---   If not set, falls back to IMGPROXY_HOST:IMGPROXY_PORT (single server)
+--   If not set, uses default imgproxy:8080 (single server)
 -- Uses round-robin load balancing across upstream servers.
 
 local _M = {}

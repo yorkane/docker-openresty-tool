@@ -59,7 +59,7 @@ if [ $NGX_OVERWRITE_CONFIG == 'true' ] || [ ! -f "/usr/local/openresty/nginx/con
 
 	# Generate img.conf from template (location /img/ configuration)
 	echo 'Generating /usr/local/openresty/nginx/conf/default_app/img.conf from template'
-	envsubst '$OR_IMG_CACHE_VALID,$OR_IMG_CACHE_BACKGROUND_UPDATE,$OR_IMG_CACHE_USE_STALE,$IMGPROXY_HOST,$IMGPROXY_PORT' < /usr/local/openresty/nginx/conf/tpl.img.conf > /usr/local/openresty/nginx/conf/default_app/img.conf
+	envsubst '$OR_IMG_CACHE_VALID,$OR_IMG_CACHE_BACKGROUND_UPDATE,$OR_IMG_CACHE_USE_STALE' < /usr/local/openresty/nginx/conf/tpl.img.conf > /usr/local/openresty/nginx/conf/default_app/img.conf
 fi
 
 
