@@ -1,10 +1,64 @@
 -- lib/imgproxy_client.lua
 -- Direct HTTP client for imgproxy using Lua cosocket
 -- Bypasses nginx's proxy_pass URL parsing issues with imgproxy's local:// URL scheme
+--
+-- Supports multiple upstream servers via IMGPROXY_UPSTREAM env var:
+--   IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
+--   If not set, falls back to IMGPROXY_HOST:IMGPROXY_PORT (single server)
+-- Uses round-robin load balancing across upstream servers.
 
 local _M = {}
 
 local http = require("resty.http")
+
+-- ── Upstream Server Pool ─────────────────────────────────────────────────────
+
+-- Parse IMGPROXY_UPSTREAM env var (comma-separated list of host:port)
+-- Returns: array of {host, port} tables
+local function parse_upstream()
+    local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
+    if not upstream_str or upstream_str == "" then
+        -- Fallback to single server mode
+        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
+        local port = os.getenv("IMGPROXY_PORT") or "8080"
+        return {{host = host, port = tonumber(port)}}
+    end
+
+    local servers = {}
+    for server in upstream_str:gmatch("[^,]+") do
+        server = server:gsub("%s+", "")  -- trim whitespace
+        local host, port = server:match("([^:]+):(%d+)")
+        if host and port then
+            table.insert(servers, {host = host, port = tonumber(port)})
+        else
+            -- No port specified, use default
+            table.insert(servers, {host = server, port = 8080})
+        end
+    end
+
+    if #servers == 0 then
+        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
+        local port = os.getenv("IMGPROXY_PORT") or "8080"
+        return {{host = host, port = tonumber(port)}}
+    end
+
+    return servers
+end
+
+-- Server pool (initialized lazily)
+local server_pool = nil
+local pool_index = 0  -- round-robin counter
+
+-- Get next server from pool (round-robin)
+local function get_next_server()
+    if not server_pool then
+        server_pool = parse_upstream()
+        pool_index = 0
+    end
+
+    pool_index = (pool_index % #server_pool) + 1
+    return server_pool[pool_index]
+end
 
 -- Map our fit values to imgproxy resizing_type
 -- imgproxy supports: fit (default), fill (crop to fill), crop
@@ -62,9 +116,8 @@ function _M.process_http(full_url, params)
     -- Build processing string
     local processing = build_processing(w, h, fit, fmt, q)
 
-    -- Get imgproxy config
-    local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-    local port = os.getenv("IMGPROXY_PORT") or "8080"
+    -- Get next server from upstream pool (round-robin)
+    local server = get_next_server()
 
     -- Strip query parameters from full_url before passing to imgproxy
     -- imgproxy will read the raw file; all processing is done via the processing string
@@ -79,7 +132,7 @@ function _M.process_http(full_url, params)
     local httpc = http.new()
     httpc:set_timeout(30000)
 
-    local ok, err = httpc:connect(host, tonumber(port))
+    local ok, err = httpc:connect(server.host, server.port)
     if not ok then
         return nil, "failed to connect to imgproxy: " .. err
     end
@@ -135,9 +188,8 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav)
     -- Build processing string
     local processing = build_processing(w, h, fit, fmt, q)
 
-    -- Get imgproxy config
-    local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
-    local port = os.getenv("IMGPROXY_PORT") or "8080"
+    -- Get next server from upstream pool (round-robin)
+    local server = get_next_server()
 
     -- Build imgproxy URL
     local imgproxy_path
@@ -167,7 +219,7 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav)
     local httpc = http.new()
     httpc:set_timeout(30000)
 
-    local ok, err = httpc:connect(host, tonumber(port))
+    local ok, err = httpc:connect(server.host, server.port)
     if not ok then
         return nil, "failed to connect to imgproxy: " .. err
     end

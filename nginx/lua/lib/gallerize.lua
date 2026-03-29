@@ -37,10 +37,48 @@ local C = ffi.C
 local DT_DIR = 4
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- imgproxy configuration
+-- imgproxy configuration (supports multiple upstream servers)
 -- ─────────────────────────────────────────────────────────────────────────────
-local IMGPROXY_HOST = os.getenv("IMGPROXY_HOST") or "imgproxy"
-local IMGPROXY_PORT = os.getenv("IMGPROXY_PORT") or "8080"
+
+-- Upstream pool (supports IMGPROXY_UPSTREAM env var)
+local function parse_upstream()
+    local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
+    if not upstream_str or upstream_str == "" then
+        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
+        local port = os.getenv("IMGPROXY_PORT") or "8080"
+        return {{host = host, port = tonumber(port)}}
+    end
+
+    local servers = {}
+    for server in upstream_str:gmatch("[^,]+") do
+        server = server:gsub("%s+", "")
+        local host, port = server:match("([^:]+):(%d+)")
+        if host and port then
+            table.insert(servers, {host = host, port = tonumber(port)})
+        else
+            table.insert(servers, {host = server, port = 8080})
+        end
+    end
+
+    if #servers == 0 then
+        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
+        local port = os.getenv("IMGPROXY_PORT") or "8080"
+        return {{host = host, port = tonumber(port)}}
+    end
+    return servers
+end
+
+local server_pool = nil
+local pool_index = 0
+
+local function get_next_server()
+    if not server_pool then
+        server_pool = parse_upstream()
+        pool_index = 0
+    end
+    pool_index = (pool_index % #server_pool) + 1
+    return server_pool[pool_index]
+end
 
 -- Build imgproxy processing string
 local function imgproxy_processing_string(w, h, fit, fmt, q)
@@ -339,11 +377,12 @@ local function process_image(src_path, dst_path, params, webdav_root)
     )
     local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
 
-    -- Connect to imgproxy
+    -- Connect to imgproxy (use upstream pool for load balancing)
     local httpc = http.new()
     httpc:set_timeout(30000)
 
-    local ok, err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
+    local server = get_next_server()
+    local ok, err = httpc:connect(server.host, server.port)
     if not ok then
         return false, "imgproxy connect failed: " .. tostring(err)
     end

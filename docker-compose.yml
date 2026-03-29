@@ -21,8 +21,13 @@ services:
       - OR_IMG_CACHE_BACKGROUND_UPDATE=on  # background update
       - OR_IMG_CACHE_USE_STALE=error timeout updating http_500 http_502 http_503 http_504  # stale cache usage
       # imgproxy service (yot handles all caching, imgproxy has cache disabled)
+      # Supports multiple upstream servers via IMGPROXY_UPSTREAM env var:
+      #   IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
+      # Uses round-robin load balancing across servers.
+      # Falls back to IMGPROXY_HOST:IMGPROXY_PORT if IMGPROXY_UPSTREAM not set.
       - IMGPROXY_HOST=imgproxy
       - IMGPROXY_PORT=8080
+      # - IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080  # uncomment for multiple upstream
       # - OR_AUTH_USER=admin:admin
     entrypoint: ["sh", "/usr/local/openresty/nginx/conf/entrypoint.sh"]
     volumes:

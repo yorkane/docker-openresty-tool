@@ -237,8 +237,47 @@ end
 -- yot writes to /mnt/ramdisk/.imgapi-tmp/ (shared named tmpfs volume)
 -- imgproxy reads from /mnt/ramdisk/ (same volume mounted)
 -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:///mnt/ramdisk/.imgapi-tmp/file → /mnt/ramdisk/.imgapi-tmp/file
-local IMGPROXY_HOST   = os.getenv("IMGPROXY_HOST") or "imgproxy"
-local IMGPROXY_PORT   = os.getenv("IMGPROXY_PORT") or "8080"
+
+-- imgproxy upstream config (supports multiple servers)
+local function parse_upstream()
+    local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
+    if not upstream_str or upstream_str == "" then
+        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
+        local port = os.getenv("IMGPROXY_PORT") or "8080"
+        return {{host = host, port = tonumber(port)}}
+    end
+
+    local servers = {}
+    for server in upstream_str:gmatch("[^,]+") do
+        server = server:gsub("%s+", "")
+        local host, port = server:match("([^:]+):(%d+)")
+        if host and port then
+            table.insert(servers, {host = host, port = tonumber(port)})
+        else
+            table.insert(servers, {host = server, port = 8080})
+        end
+    end
+
+    if #servers == 0 then
+        local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
+        local port = os.getenv("IMGPROXY_PORT") or "8080"
+        return {{host = host, port = tonumber(port)}}
+    end
+    return servers
+end
+
+local server_pool = nil
+local pool_index = 0
+
+local function get_next_server()
+    if not server_pool then
+        server_pool = parse_upstream()
+        pool_index = 0
+    end
+    pool_index = (pool_index % #server_pool) + 1
+    return server_pool[pool_index]
+end
+
 local TMP_DIR         = "/mnt/ramdisk/.imgapi-tmp"
 local TMP_REL_DIR     = "mnt/ramdisk/.imgapi-tmp"  -- no leading / for imgproxy local:// URL
 
@@ -314,7 +353,8 @@ local function process_image_via_api(img_data, opts, ext)
     local httpc = http.new()
     httpc:set_timeout(30000)
 
-    local ok, conn_err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
+    local server = get_next_server()
+    local ok, conn_err = httpc:connect(server.host, server.port)
     if not ok then
         os.remove(abs_path)
         return nil, "failed to connect to imgproxy: " .. tostring(conn_err), 502
