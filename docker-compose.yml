@@ -61,6 +61,12 @@ services:
       - IMGPROXY_LOG_LEVEL=warn             # Minimal logging for performance
       - IMGPROXY_DEV_MODE_STRICT=false
       - IMGPROXY_FAMILY=0                   # IPv4 only
+      # WebDAV access to yot for ZIP/CBZ transparent processing (Plan A)
+      # imgproxy reads zip contents through yot's webdav endpoint with zipfs transparent integration
+      - IMGPROXY_WEBDAV_ROOT=/webdav        # yot's webdav root maps to /data in yot container
+      - IMGPROXY_WEBDAV_ENDPOINT=http://yot:5080
+      - IMGPROXY_WEBDAV_USER=               # No auth for webdav
+      - IMGPROXY_WEBDAV_PASSWORD=
     volumes:
       - ./data:/data:ro                     # Read-only access to webdav directory
       # RAM disk for imgproxy temp files (zero disk I/O)

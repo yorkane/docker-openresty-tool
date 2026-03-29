@@ -51,7 +51,7 @@ end
 
 -- Process image from HTTP URL via imgproxy
 -- full_url: the complete HTTP URL to fetch the source image from
--- e.g., "http://yot:5080/zip/archives/book.cbz/images/cover.jpg"
+-- e.g., "http://yot:5080/zip/archives/book.cbz/images/cover.jpg?w=360&h=504&fit=cover&q=82"
 function _M.process_http(full_url, params)
     local w = params.w
     local h = params.h
@@ -66,9 +66,14 @@ function _M.process_http(full_url, params)
     local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
     local port = os.getenv("IMGPROXY_PORT") or "8080"
 
-    -- Build imgproxy URL with HTTP source
-    -- imgproxy_path: /insecure/<processing>/plain/http://<full_url>
-    local imgproxy_path = "/insecure/" .. processing .. "/plain/" .. full_url
+    -- Strip query parameters from full_url before passing to imgproxy
+    -- imgproxy will read the raw file; all processing is done via the processing string
+    -- If we pass query params, serve_zip will double-process the image (bad!)
+    local source_url = full_url:gsub("%?.*$", "")
+
+    -- Build imgproxy URL with HTTP source (no query params in source URL)
+    -- imgproxy_path: /insecure/<processing>/plain/http://<source_url>
+    local imgproxy_path = "/insecure/" .. processing .. "/plain/" .. source_url
 
     -- Make HTTP request to imgproxy
     local httpc = http.new()

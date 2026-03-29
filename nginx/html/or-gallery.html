@@ -1554,7 +1554,7 @@ const GalleryView = {
 
     let url;
     if (isZip(type)) {
-      // ZIP内封面走 /zip/ 路由，不能用 /img/ 做缩略图
+      // ZIP内封面走 /imgproxy/zip/ 路由，通过 imgproxy 处理并缓存
       // coverPath may be /foo/bar.cbz or /foo/bar.cbz/subdir
       // Need internal path = everything after zip boundary in coverPath + / + name
       const low = coverPath.toLowerCase();
@@ -1565,7 +1565,9 @@ const GalleryView = {
       }
       const internalDir = zipBoundary > 0 ? coverPath.slice(zipBoundary).replace(/^\/+/, '') : '';
       const internalPath = internalDir ? internalDir + '/' + coverItem.name : coverItem.name;
-      url = zipFileUrl(path, internalPath);
+      // 使用 /imgproxy/zip/ 端点进行图片处理和缓存
+      const encodedInternal = internalPath.split('/').map(s => encodeURIComponent(s)).join('/');
+      url = '/imgproxy/zip' + encodeFilePath(path) + '/' + encodedInternal + '?w=360&h=504&fit=cover&q=82';
     } else {
       // 普通目录封面走 /img/ 做 vips 缩略图（360px 宽，cover 模式）
       const rawUrl = fileUrl(coverPath, coverItem.name);
