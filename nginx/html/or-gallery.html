@@ -237,6 +237,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   width: auto; height: auto;
   display: block;
   user-select: none; -webkit-user-drag: none;
+  cursor: move;  /* indicate draggable when hovering */
 }
 /* Rotate mode: rotate 90°, swap w/h logic */
 .page-img-wrap.rotate {
@@ -1799,13 +1800,15 @@ const Reader = {
     // Canvas click zone
     this.canvas.addEventListener('click', e => this._handleCanvasClick(e));
 
-    // ── Orig-mode drag-to-pan (mouse) ──────────────────────────────────────
+    // ── Orig-mode drag-to-pan (mouse on canvas background) ─────────────────
     this.canvas.addEventListener('mousedown', e => {
       if (!this.canvas.classList.contains('orig')) return;
       if (e.button !== 0) return;
+      // Don't start canvas drag if clicking on an image (image has its own handler)
+      if (e.target.closest('.page-img-wrap img')) return;
       this._drag = { active: true, startX: e.clientX, startY: e.clientY,
                      scrollLeft: this.canvas.scrollLeft, scrollTop: this.canvas.scrollTop,
-                     moved: false };
+                     moved: false, source: 'canvas' };
       this.canvas.style.cursor = 'grabbing';
       e.preventDefault();
     });
@@ -1823,12 +1826,17 @@ const Reader = {
       if (this.canvas.classList.contains('orig')) this.canvas.style.cursor = 'grab';
     });
 
-    // ── Orig-mode drag-to-pan (touch, two-finger scroll already works natively) ──
+    // ── Orig-mode drag-to-pan (touch, only for canvas background) ─────────
+    // Note: single-touch drag on images is handled in _appendPageImg
     this.canvas.addEventListener('touchstart', e => {
       if (!this.canvas.classList.contains('orig') || e.touches.length !== 1) return;
-      const t = e.touches[0];
-      this._drag = { active: true, startX: t.clientX, startY: t.clientY,
-                     scrollLeft: this.canvas.scrollLeft, scrollTop: this.canvas.scrollTop };
+      // Don't start canvas drag if touching on an image
+      const touch = e.touches[0];
+      const el = document.elementFromPoint(touch.clientX, touch.clientY);
+      if (el && el.closest('.page-img-wrap')) return;
+      this._drag = { active: true, startX: touch.clientX, startY: touch.clientY,
+                     scrollLeft: this.canvas.scrollLeft, scrollTop: this.canvas.scrollTop,
+                     source: 'canvas' };
     }, { passive: true });
     this.canvas.addEventListener('touchmove', e => {
       if (!this._drag.active || e.touches.length !== 1) return;
@@ -1838,30 +1846,30 @@ const Reader = {
     }, { passive: true });
     this.canvas.addEventListener('touchend', () => { this._drag.active = false; }, { passive: true });
 
-    // ── Orig-mode wheel-to-zoom ────────────────────────────────────────────
+    // ── Orig-mode: wheel-to-zoom (Ctrl/Cmd+Wheel only) ────────────────────
+    // In orig mode, wheel zooms only when Ctrl/Cmd is held.
+    // Without modifier, wheel scrolls the page (native behavior).
     this.canvas.addEventListener('wheel', e => {
       if (!this.canvas.classList.contains('orig')) return;
-      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        const newScale = Math.min(this._SCALE_MAX, Math.max(this._SCALE_MIN, this._scale * delta));
+        if (newScale === this._scale) return;
 
-      const delta = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      const newScale = Math.min(this._SCALE_MAX, Math.max(this._SCALE_MIN, this._scale * delta));
-      if (newScale === this._scale) return;
+        const rect = this.canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const wx = (this.canvas.scrollLeft + mx) / this._scale;
+        const wy = (this.canvas.scrollTop  + my) / this._scale;
 
-      // Mouse position relative to canvas viewport
-      const rect = this.canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;  // mouse x in canvas viewport
-      const my = e.clientY - rect.top;
+        this._scale = newScale;
+        this._applyScale();
 
-      // World position under the mouse before scaling
-      const wx = (this.canvas.scrollLeft + mx) / this._scale;
-      const wy = (this.canvas.scrollTop  + my) / this._scale;
-
-      this._scale = newScale;
-      this._applyScale();
-
-      // After scaling, restore mouse-world alignment
-      this.canvas.scrollLeft = wx * this._scale - mx;
-      this.canvas.scrollTop  = wy * this._scale - my;
+        this.canvas.scrollLeft = wx * this._scale - mx;
+        this.canvas.scrollTop  = wy * this._scale - my;
+      }
+      // Without Ctrl/Cmd: let native scroll take over (no preventDefault)
     }, { passive: false });
 
     // Touch swipe (non-orig)
@@ -2106,6 +2114,60 @@ const Reader = {
       img.src = item.url;
     }
 
+    // ── Orig-mode interaction on image ─────────────────────────────
+    if (this._viewMode === 'orig') {
+      // Wheel: scroll canvas (pan) when hovering over image
+      img.addEventListener('wheel', e => {
+        if (!this.canvas.classList.contains('orig')) return;
+        // Prevent page scroll, but scroll the canvas
+        e.preventDefault();
+        this.canvas.scrollLeft += e.deltaX || e.deltaY;
+      }, { passive: false });
+
+      // Mouse drag on image to pan
+      img.addEventListener('mousedown', e => {
+        if (!this.canvas.classList.contains('orig') || e.button !== 0) return;
+        e.preventDefault();
+        this._drag = {
+          active: true,
+          startX: e.clientX,
+          startY: e.clientY,
+          scrollLeft: this.canvas.scrollLeft,
+          scrollTop: this.canvas.scrollTop,
+          moved: false,
+          source: 'img'  // track source for click detection
+        };
+        this.canvas.style.cursor = 'grabbing';
+      });
+
+      // Touch drag on image
+      img.addEventListener('touchstart', e => {
+        if (!this.canvas.classList.contains('orig') || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        this._drag = {
+          active: true,
+          startX: t.clientX,
+          startY: t.clientY,
+          scrollLeft: this.canvas.scrollLeft,
+          scrollTop: this.canvas.scrollTop,
+          source: 'img'
+        };
+      }, { passive: true });
+
+      img.addEventListener('touchmove', e => {
+        if (!this._drag.active || this._drag.source !== 'img' || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        const dx = t.clientX - this._drag.startX;
+        const dy = t.clientY - this._drag.startY;
+        this.canvas.scrollLeft = this._drag.scrollLeft - dx;
+        this.canvas.scrollTop = this._drag.scrollTop - dy;
+      }, { passive: true });
+
+      img.addEventListener('touchend', () => {
+        if (this._drag.source === 'img') this._drag.active = false;
+      }, { passive: true });
+    }
+
     wrap.appendChild(img);
     this.canvas.appendChild(wrap);
   },
@@ -2270,6 +2332,8 @@ const Reader = {
     if (e.target.closest('#reader-toolbar')) return;
     // If user just panned in orig mode, don't treat mouseup as a navigation click
     if (this._drag.moved) { this._drag.moved = false; return; }
+    // Also ignore clicks that started on an image (they have their own drag handler)
+    if (e.target.closest('.page-img-wrap img')) return;
     const rect = this.el.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const zone = rect.width / 3;
