@@ -744,11 +744,20 @@ async function fetchCoverItem(path) {
     const data = await apiLs(path, { page: 1, page_size: 20 });
     let imgs = naturalSort(data.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
     let coverPath = path; // the directory where the cover lives
-    // If no images at root but has subdirs, peek into first subdir (common cbz layout)
+    // If no images at root but has subdirs, look for common image directory names first
+    // CBZ/ZIP files typically have cover in images/, image/, or Pictures/ subdir
     if (!imgs.length) {
-      const firstSubdir = naturalSort(data.items, 'name').find(it => it.type === 'dir');
-      if (firstSubdir) {
-        coverPath = joinPath(path, firstSubdir.name);
+      const subdirs = naturalSort(data.items, 'name').filter(it => it.type === 'dir');
+      // First, try common image directory names
+      const imageDirNames = new Set(['images', 'image', 'pictures', 'picture', 'imgs', 'img', 'photos', 'photo', 'scans', 'scan']);
+      const imageSubdir = subdirs.find(it => imageDirNames.has(it.name.toLowerCase()));
+      if (imageSubdir) {
+        coverPath = joinPath(path, imageSubdir.name);
+        const sub = await apiLs(coverPath, { page: 1, page_size: 5 });
+        imgs = naturalSort(sub.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
+      } else if (subdirs.length) {
+        // Fallback: peek into first subdir (less common layout)
+        coverPath = joinPath(path, subdirs[0].name);
         const sub = await apiLs(coverPath, { page: 1, page_size: 5 });
         imgs = naturalSort(sub.items, 'name').filter(it => it.type === 'file' && isImage(it.name));
       }
