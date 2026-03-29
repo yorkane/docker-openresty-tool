@@ -3,6 +3,7 @@ services:
   yot:
     image: ghcr.io/yorkane/docker-openresty-tool:latest
     container_name: yot
+    platform: linux/amd64
     environment:
       - NGX_OVERWRITE_CONFIG=true
       - NGX_PORT=80
@@ -44,6 +45,7 @@ services:
   imgproxy:
     image: ghcr.io/imgproxy/imgproxy:latest
     container_name: imgproxy
+    platform: linux/amd64
     environment:
       # Performance-first: disable all caches, maximize workers
       # LOCAL_FILESYSTEM_ROOT=/ allows imgproxy to access any absolute path:
