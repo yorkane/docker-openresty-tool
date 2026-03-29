@@ -1,6 +1,6 @@
 # template for the root nginx.conf
 user ngx_usr ngx_usr;
-pid		logs/fccdddcb6b81.pid;
+pid		logs/80d780684908.pid;
 worker_rlimit_nofile 65535;
 worker_processes auto; # match to the cpu cores or cores x2
 

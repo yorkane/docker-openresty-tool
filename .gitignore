@@ -64,4 +64,11 @@ luac.out
 *.x86_64
 *.hex
 
-/.idea/
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Config files (use .example files as templates)
+nginx/conf/nginx.conf
+nginx/conf/nginx.conf.example
