@@ -143,12 +143,21 @@ function _M.handle(conf)
         conf = conf or env.auth_conf
     end
 
-    local ip = ngx.var.http_x_forwarded_for or ngx.var.remote_addr
+    -- Extract the FIRST IP from X-Forwarded-For (original client IP through proxies)
+    -- Format: "<original_ip>, <proxy1_ip>, <proxy2_ip>, ... <current_ip>"
+    local forwarded_for = ngx.var.http_x_forwarded_for
+    local ip
+    if forwarded_for then
+        ip = forwarded_for:match("^%s*([^,%s]+)")
+    else
+        ip = ngx.var.remote_addr
+    end
     local ua = ngx.req.get_headers(100)[conf.auth_key or 'x-bakey'] or 0
 
     -- Build effective IP whitelist: OR_AUTH_IP_WHITELIST + IMGPROXY_UPSTREAM IPs
-    local whitelist = os.getenv("OR_AUTH_IP_WHITELIST") or ""
+    local env_whitelist = os.getenv("OR_AUTH_IP_WHITELIST") or ""
     local upstream_ips = get_imgproxy_upstream_ips()
+    local whitelist = env_whitelist
     if upstream_ips ~= "" then
         if whitelist ~= "" then
             whitelist = whitelist .. "," .. upstream_ips
@@ -157,8 +166,13 @@ function _M.handle(conf)
         end
     end
 
+    -- DEBUG: log whitelist info
+    ngx.log(ngx.DEBUG, "[basic_auth] client_ip=", ip, " upstream=", os.getenv("IMGPROXY_UPSTREAM") or "",
+            " whitelist=", whitelist, " env_whitelist=", env_whitelist, " upstream_ips=", upstream_ips)
+
     -- Check whitelist first (whitelisted IPs skip auth)
     if is_ip_whitelisted(ip, whitelist) then
+        ngx.log(ngx.DEBUG, "[basic_auth] IP whitelisted, allowing")
         return ip
     end
 
