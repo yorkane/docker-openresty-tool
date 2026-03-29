@@ -54,7 +54,6 @@ services:
       - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/
       - IMGPROXY_DISABLE_CACHE=true
       - IMGPROXY_WORKERS=1                 # 1 = minimal worker, yot handles caching
-      - IMGPROXY_CONCURRENCY=0              # 0 = auto (unlimited concurrent operations)
       - IMGPROXY_MAX_SRC_FILESIZE=104857600  # 100MB max source file
       - IMGPROXY_MAX_RESOLUTION=66741696    # 64MP max resolution
       - IMGPROXY_STRIP_COLOR_PROFILE=Never   # Keep color profile for accuracy
