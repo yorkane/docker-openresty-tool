@@ -149,8 +149,9 @@ end
 -- Make HTTP request to imgproxy and return response
 -- imgproxy_path: the path portion of the imgproxy URL (e.g. "/insecure/w:200/plain/local:///...")
 -- timeout_ms: request timeout in milliseconds (default 30000)
+-- extra_headers: optional table of additional headers to include
 -- Returns: result {status, headers, body} or nil, error, status
-function _M.request(imgproxy_path, timeout_ms)
+function _M.request(imgproxy_path, timeout_ms, extra_headers)
     timeout_ms = timeout_ms or 30000
 
     local httpc = http.new()
@@ -162,12 +163,20 @@ function _M.request(imgproxy_path, timeout_ms)
         return nil, "failed to connect to imgproxy: " .. err
     end
 
+    local headers = {
+        ["Host"] = "localhost",
+    }
+    -- Merge extra headers
+    if extra_headers then
+        for k, v in pairs(extra_headers) do
+            headers[k] = v
+        end
+    end
+
     local res, err = httpc:request({
         method = "GET",
         path = imgproxy_path,
-        headers = {
-            ["Host"] = "localhost",
-        }
+        headers = headers
     })
 
     if not res then
@@ -233,7 +242,8 @@ end
 -- rel_path: path relative to webdav_root (e.g. "images/photo.jpg")
 -- params: {w, h, fit, fmt, q}
 -- use_webdav: if true, use webdav:// URL instead of local:// (for zip/cbz access)
-function _M.process_local(webdav_root, rel_path, params, use_webdav)
+-- extra_headers: optional table of additional headers
+function _M.process_local(webdav_root, rel_path, params, use_webdav, extra_headers)
     local w = params.w
     local h = params.h
     local fit = params.fit or "contain"
@@ -271,14 +281,15 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav)
         imgproxy_path = _M.build_local_url(full_rel, processing)
     end
 
-    return _M.request(imgproxy_path)
+    return _M.request(imgproxy_path, nil, extra_headers)
 end
 
 -- Process image from HTTP URL via imgproxy
 -- full_url: the complete HTTP URL to fetch the source image from
 -- e.g., "http://yot:5080/zip/archives/book.cbz/images/cover.jpg"
 -- params: {w, h, fit, fmt, q}
-function _M.process_http(full_url, params)
+-- extra_headers: optional table of additional headers
+function _M.process_http(full_url, params, extra_headers)
     local w = params.w
     local h = params.h
     local fit = params.fit or "contain"
@@ -292,7 +303,7 @@ function _M.process_http(full_url, params)
     local source_url = full_url:gsub("%?.*$", "")
 
     local imgproxy_path = _M.build_http_url(source_url, processing)
-    return _M.request(imgproxy_path)
+    return _M.request(imgproxy_path, nil, extra_headers)
 end
 
 return _M

@@ -152,6 +152,14 @@ function _M.handle(conf)
     else
         ip = ngx.var.remote_addr
     end
+
+    -- Check internal auth header (allows bypassing IP whitelist for trusted services like imgproxy)
+    local internal_auth_header = os.getenv("OR_INTERNAL_AUTH_HEADER") or ""
+    local request_internal_auth = ngx.var.http_x_internal_auth or ""
+    if internal_auth_header ~= "" and request_internal_auth == internal_auth_header then
+        ngx.log(ngx.DEBUG, "[basic_auth] Internal auth header matched, allowing")
+        return ip
+    end
     local ua = ngx.req.get_headers(100)[conf.auth_key or 'x-bakey'] or 0
 
     -- Build effective IP whitelist: OR_AUTH_IP_WHITELIST + IMGPROXY_UPSTREAM IPs

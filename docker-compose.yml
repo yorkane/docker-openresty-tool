@@ -27,6 +27,8 @@ services:
       # IP whitelist for免认证访问 (逗号分隔，支持IP段如 192.168.1.0/24)
       # IMGPROXY_UPSTREAM 中的IP会自动加入白名单
       - OR_AUTH_IP_WHITELIST=${OR_AUTH_IP_WHITELIST:-}
+      # Internal auth header for trusted services (imgproxy) to bypass IP whitelist
+      - OR_INTERNAL_AUTH_HEADER=${OR_INTERNAL_AUTH_HEADER:-}
       # Basic auth (optional): format "username:password"
       - OR_AUTH_USER=${OR_AUTH_USER:-gallery:test@123}
     entrypoint: ["sh", "/usr/local/openresty/nginx/conf/entrypoint.sh"]

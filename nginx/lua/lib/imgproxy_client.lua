@@ -11,6 +11,10 @@ local _M = {}
 
 local imgproxy = require("lib.imgproxy")
 
+-- Internal auth header for imgproxy → yot requests
+-- This header allows imgproxy to bypass yot's IP whitelist
+local INTERNAL_AUTH_HEADER = os.getenv("OR_INTERNAL_AUTH_HEADER") or ""
+
 -- ── Public API ───────────────────────────────────────────────────────────────
 
 -- Process image from HTTP URL via imgproxy
@@ -36,7 +40,13 @@ function _M.process_http(full_url, params)
     -- imgproxy_path: /insecure/<processing>/plain/http://<source_url>
     local imgproxy_path = imgproxy.build_http_url(source_url, processing)
 
-    return imgproxy.request(imgproxy_path)
+    -- Add internal auth header if configured (allows bypassing yot's IP whitelist)
+    local extra_headers = nil
+    if INTERNAL_AUTH_HEADER ~= "" then
+        extra_headers = {["X-Internal-Auth"] = INTERNAL_AUTH_HEADER}
+    end
+
+    return imgproxy.request(imgproxy_path, nil, extra_headers)
 end
 
 -- Process image from local path via imgproxy
@@ -45,7 +55,12 @@ end
 -- params:      {w, h, fit, fmt, q}
 -- use_webdav: if true, use webdav:// URL instead of local:// (for zip/cbz access via zipfs)
 function _M.process_local(webdav_root, rel_path, params, use_webdav)
-    return imgproxy.process_local(webdav_root, rel_path, params, use_webdav)
+    -- Add internal auth header if configured (allows bypassing yot's IP whitelist)
+    local extra_headers = nil
+    if INTERNAL_AUTH_HEADER ~= "" then
+        extra_headers = {["X-Internal-Auth"] = INTERNAL_AUTH_HEADER}
+    end
+    return imgproxy.process_local(webdav_root, rel_path, params, use_webdav, extra_headers)
 end
 
 return _M
