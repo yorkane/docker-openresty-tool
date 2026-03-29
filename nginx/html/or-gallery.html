@@ -2301,10 +2301,10 @@ const Reader = {
     img.draggable = false;
 
     // Build thumbnail URL using same logic as gallery cover
-    // Use imgproxy for consistent thumbnail generation
+    // Use imgproxy for consistent thumbnail generation (360x360 square)
     let thumbUrl;
     if (this._isZip) {
-      // ZIP内图片: /imgproxy/zip/<archivePath>/<internalPath>?w=180&h=180&fit=cover&q=75
+      // ZIP内图片: /imgproxy/zip/<archivePath>/<internalPath>?w=360&h=360&fit=cover&q=75
       // item.url = /zip/<archivePath>/<internalPath>
       // Extract internal path from item.url
       const zipMatch = item.url.match(/^\/zip(\/.*)/);
@@ -2315,23 +2315,29 @@ const Reader = {
         const internalPath = afterZip.slice(lastSlash + 1);
         const encodedArchive = archivePath.split('/').map(s => encodeURIComponent(s)).join('/');
         const encodedInternal = internalPath.split('/').map(s => encodeURIComponent(s)).join('/');
-        thumbUrl = '/imgproxy/zip' + encodedArchive + '/' + encodedInternal + '?w=180&h=180&fit=cover&q=75';
+        thumbUrl = '/imgproxy/zip' + encodedArchive + '/' + encodedInternal + '?w=360&h=360&fit=cover&q=75';
       } else {
         thumbUrl = item.url; // fallback
       }
     } else {
-      // 普通目录: /img + fileUrl + ?w=180&h=180&fit=cover&q=75
+      // 普通目录: /img + fileUrl + ?w=360&h=360&fit=cover&q=75
       // item.url = /webdav/path/to/image.jpg
       const rawUrl = item.url.replace(/^\/webdav/, '');
-      thumbUrl = '/img' + rawUrl + '?w=180&h=180&fit=cover&q=75';
+      thumbUrl = '/img' + rawUrl + '?w=360&h=360&fit=cover&q=75';
     }
 
     img.src = thumbUrl;
     img.onload = () => { loadingIndicator.style.display = 'none'; };
     img.onerror = () => {
-      loadingIndicator.innerHTML = '⚠️';
-      loadingIndicator.className = '';
-      loadingIndicator.style.cssText = 'font-size:18px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);';
+      // 缩略图失败时回退到原图（像 gallery 封面一样）
+      if (img.src !== item.url) {
+        img.onerror = null; // 防止无限重试
+        img.src = item.url;
+      } else {
+        loadingIndicator.innerHTML = '⚠️';
+        loadingIndicator.className = '';
+        loadingIndicator.style.cssText = 'font-size:18px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);';
+      }
     };
 
     // Page number badge
