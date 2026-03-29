@@ -223,6 +223,140 @@ local function render_listing(zip_rel, inner, entries, url_prefix)
 end
 
 -- ──────────────────────────────────────────────────────────
+-- Image processing helpers (for ZIP cover thumbnails)
+-- ──────────────────────────────────────────────────────────
+
+-- Check if a filename is an image
+local function is_image(filename)
+    local ext = (filename or ""):match("%.([^./]+)$") or ""
+    ext = ext:lower()
+    return mime_map[ext] and mime_map[ext]:sub(1, 6) == "image/"
+end
+
+-- RAM Disk Bridge config (same as imgapi.lua)
+-- yot writes to /mnt/ramdisk/.imgapi-tmp/ (shared named tmpfs volume)
+-- imgproxy reads from /mnt/ramdisk/ (same volume mounted)
+-- imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:///mnt/ramdisk/.imgapi-tmp/file → /mnt/ramdisk/.imgapi-tmp/file
+local IMGPROXY_HOST   = os.getenv("IMGPROXY_HOST") or "imgproxy"
+local IMGPROXY_PORT   = os.getenv("IMGPROXY_PORT") or "8080"
+local TMP_DIR         = "/mnt/ramdisk/.imgapi-tmp"
+local TMP_REL_DIR     = "mnt/ramdisk/.imgapi-tmp"  -- no leading / for imgproxy local:// URL
+
+-- Ensure tmp directory exists with correct permissions
+os.execute("mkdir -p " .. TMP_DIR .. " && chmod 1777 " .. TMP_DIR)
+
+-- Save image data to temp file, return absolute path and relative path for imgproxy
+local function save_to_temp_file(img_data, ext)
+    os.execute("mkdir -p " .. TMP_DIR .. " && chmod 1777 " .. TMP_DIR)
+    local unique_id = ngx.now() * 1000 + math.random(1000)
+    local filename = string.format("%d.%s", unique_id, ext or "jpg")
+    local abs_path = TMP_DIR .. "/" .. filename
+    local f, err = io.open(abs_path, "wb")
+    if not f then
+        return nil, nil, "failed to open temp file: " .. tostring(err)
+    end
+    local ok, werr = f:write(img_data)
+    f:close()
+    if not ok then
+        return nil, nil, "failed to write temp file: " .. tostring(werr)
+    end
+    -- abs_path: /mnt/ramdisk/.imgapi-tmp/xxx.jpg (for cleanup)
+    -- rel_path: mnt/ramdisk/.imgapi-tmp/xxx.jpg (for imgproxy local:// URL)
+    local rel_path = TMP_REL_DIR .. "/" .. filename
+    return abs_path, rel_path
+end
+
+-- Process image via imgproxy using RAM Disk Bridge
+-- 1. Write image data to tmpfs (ramdisk)
+-- 2. Call imgproxy with local:// URL to read from ramdisk
+-- 3. Return result and cleanup temp file
+-- Returns: result {body, headers}, err, status
+local function process_image_via_api(img_data, opts, ext)
+    local http = require("resty.http")
+
+    -- Normalize extension
+    ext = ext or "jpg"
+    if ext == "jpeg" then ext = "jpg" end
+
+    -- Save to temp file
+    local abs_path, rel_path, err = save_to_temp_file(img_data, ext)
+    if not abs_path then
+        return nil, "failed to save temp file: " .. err, 500
+    end
+
+    -- Build processing string
+    local parts = {}
+    if opts.w and opts.w > 0 then
+        table.insert(parts, "width:" .. tostring(opts.w))
+    end
+    if opts.h and opts.h > 0 then
+        table.insert(parts, "height:" .. tostring(opts.h))
+    end
+    if opts.fit == "cover" then
+        table.insert(parts, "resizing_type:fill")
+    elseif opts.fit == "fill" then
+        -- imgproxy doesn't support stretch, use default
+    end
+    if opts.fmt and opts.fmt ~= "" then
+        local fmt = opts.fmt
+        if fmt == "jpeg" then fmt = "jpg" end
+        table.insert(parts, "format:" .. fmt)
+    end
+    if opts.q and opts.q > 0 then
+        table.insert(parts, "quality:" .. tostring(opts.q))
+    end
+    local processing = table.concat(parts, "/")
+
+    -- Build imgproxy URL with local:// scheme pointing to ramdisk
+    -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:///mnt/ramdisk/.imgapi-tmp/file → /mnt/ramdisk/.imgapi-tmp/file
+    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
+
+    local httpc = http.new()
+    httpc:set_timeout(30000)
+
+    local ok, conn_err = httpc:connect(IMGPROXY_HOST, tonumber(IMGPROXY_PORT))
+    if not ok then
+        os.remove(abs_path)
+        return nil, "failed to connect to imgproxy: " .. tostring(conn_err), 502
+    end
+
+    local proxy_res, perr = httpc:request({
+        method = "GET",
+        path = imgproxy_path,
+        headers = {
+            ["Host"] = "localhost",
+        }
+    })
+
+    if not proxy_res then
+        httpc:close()
+        os.remove(abs_path)
+        return nil, "imgproxy request failed: " .. tostring(perr), 502
+    end
+
+    local res_body, rerr = proxy_res:read_body()
+    if not res_body then
+        httpc:close()
+        os.remove(abs_path)
+        return nil, "failed to read imgproxy response: " .. tostring(rerr), 502
+    end
+
+    httpc:set_keepalive(10000, 64)
+
+    -- Cleanup temp file
+    os.remove(abs_path)
+
+    if proxy_res.status ~= 200 then
+        return nil, "imgproxy returned " .. proxy_res.status, proxy_res.status
+    end
+
+    return {
+        body = res_body,
+        headers = proxy_res.headers,
+    }, nil, 200
+end
+
+-- ──────────────────────────────────────────────────────────
 -- Shared serve logic: given zip_rel + inner, serve listing or file content.
 -- url_prefix is used to generate directory-listing links.
 -- ──────────────────────────────────────────────────────────
@@ -264,6 +398,34 @@ local function serve_zip(webdav_root, zip_rel, inner, url_prefix)
     zf:close()
 
     if not data then return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR) end
+
+    -- Check if image processing is requested
+    local args = ngx.req.get_uri_args()
+    local needs_processing = args.w or args.h or args.fit or args.fmt or args.q
+
+    if is_image(inner) and needs_processing then
+        -- Extract extension from inner filename for temp file naming
+        local ext = inner:match("%.([^./]+)$") or "jpg"
+        -- Process image via imgproxy (RAM Disk Bridge)
+        local result, err, status = process_image_via_api(data, {
+            w = tonumber(args.w) or 0,
+            h = tonumber(args.h) or 0,
+            fit = args.fit or "contain",
+            fmt = args.fmt or "",
+            q = tonumber(args.q) or 82
+        }, ext)
+
+        if result then
+            ngx.header["Content-Type"] = result.headers["Content-Type"] or "application/octet-stream"
+            ngx.header["Content-Length"] = #result.body
+            ngx.header["X-ZipFS"] = "processed"
+            ngx.header["Cache-Control"] = "public, max-age=3600"
+            return ngx.print(result.body)
+        else
+            ngx.log(ngx.WARN, "[zipfs] image processing failed: ", err, ", serving original")
+            -- Fall through to serve original
+        end
+    end
 
     ngx.header["Content-Type"]   = mime_of(inner)
     ngx.header["Content-Length"] = #data

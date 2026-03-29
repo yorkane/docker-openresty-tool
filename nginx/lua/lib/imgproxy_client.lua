@@ -49,10 +49,10 @@ local function build_processing(w, h, fit, fmt, q)
     return table.concat(parts, "/")
 end
 
--- Process image from local path via imgproxy
--- webdav_root: the webdav root directory (e.g. "/webdav" → maps to /data)
--- rel_path:    path relative to webdav_root (e.g. "images/photo.jpg")
-function _M.process_local(webdav_root, rel_path, params)
+-- Process image from HTTP URL via imgproxy
+-- full_url: the complete HTTP URL to fetch the source image from
+-- e.g., "http://yot:5080/zip/archives/book.cbz/images/cover.jpg"
+function _M.process_http(full_url, params)
     local w = params.w
     local h = params.h
     local fit = params.fit or "contain"
@@ -66,19 +66,97 @@ function _M.process_local(webdav_root, rel_path, params)
     local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
     local port = os.getenv("IMGPROXY_PORT") or "8080"
 
-    -- Build imgproxy URL: /insecure/<processing>/plain/local:///<abs_path_no_leading_slash>
-    -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so we pass the full path without leading slash:
-    --   webdav_root="/webdav" → maps to /data in imgproxy container
-    --   rel_path="images/photo.jpg" → full path = "data/images/photo.jpg"
-    -- Note: /webdav and /data both resolve to the same bind mount (./data)
-    local full_rel
-    if webdav_root and webdav_root ~= "" then
-        -- Map /webdav → data (strip leading slash, replace with "data/")
-        full_rel = "data/" .. rel_path
-    else
-        full_rel = rel_path
+    -- Build imgproxy URL with HTTP source
+    -- imgproxy_path: /insecure/<processing>/plain/http://<full_url>
+    local imgproxy_path = "/insecure/" .. processing .. "/plain/" .. full_url
+
+    -- Make HTTP request to imgproxy
+    local httpc = http.new()
+    httpc:set_timeout(30000)
+
+    local ok, err = httpc:connect(host, tonumber(port))
+    if not ok then
+        return nil, "failed to connect to imgproxy: " .. err
     end
-    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. full_rel
+
+    local res, err = httpc:request({
+        method = "GET",
+        path = imgproxy_path,
+        headers = {
+            ["Host"] = "localhost",
+        }
+    })
+
+    if not res then
+        httpc:close()
+        return nil, "imgproxy request failed: " .. err
+    end
+
+    local body, err = res:read_body()
+    if not body then
+        httpc:close()
+        return nil, "failed to read imgproxy response: " .. err
+    end
+
+    httpc:set_keepalive(10000, 64)
+
+    local status = res.status
+    local headers = res.headers
+
+    if status ~= 200 then
+        local err_msg = body or "imgproxy returned status " .. status
+        ngx.log(ngx.WARN, "[imgproxy_client] error: ", err_msg)
+        return nil, err_msg, status
+    end
+
+    return {
+        status = status,
+        headers = headers,
+        body = body
+    }
+end
+
+-- Process image from local path via imgproxy
+-- webdav_root: the webdav root directory (e.g. "/webdav" → maps to /data)
+-- rel_path:    path relative to webdav_root (e.g. "images/photo.jpg")
+-- use_webdav: if true, use webdav:// URL instead of local:// (for zip/cbz access via zipfs)
+function _M.process_local(webdav_root, rel_path, params, use_webdav)
+    local w = params.w
+    local h = params.h
+    local fit = params.fit or "contain"
+    local fmt = params.fmt or ""
+    local q = params.q or 82
+
+    -- Build processing string
+    local processing = build_processing(w, h, fit, fmt, q)
+
+    -- Get imgproxy config
+    local host = os.getenv("IMGPROXY_HOST") or "imgproxy"
+    local port = os.getenv("IMGPROXY_PORT") or "8080"
+
+    -- Build imgproxy URL
+    local imgproxy_path
+    if use_webdav then
+        -- Use webdav:// URL for zip/cbz transparent access via zipfs
+        -- IMGPROXY_WEBDAV_ROOT=/webdav, so path should be relative to /webdav
+        -- e.g., rel_path="archives/book.cbz/cover.jpg" → webdav:/archives/book.cbz/cover.jpg
+        local webdav_rel = rel_path
+        imgproxy_path = "/insecure/" .. processing .. "/plain/webdav:/" .. webdav_rel
+    else
+        -- Build imgproxy URL: /insecure/<processing>/plain/local:///<abs_path_no_leading_slash>
+        -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so we pass the full path without leading slash:
+        --   webdav_root="/webdav" → maps to /data in imgproxy container
+        --   rel_path="images/photo.jpg" → full path = "data/images/photo.jpg"
+        -- Note: /webdav and /data both resolve to the same bind mount (./data)
+        local full_rel
+        if webdav_root and webdav_root ~= "" then
+            -- Map /webdav → data (strip leading slash, replace with "data/")
+            full_rel = "data/" .. rel_path
+        else
+            full_rel = rel_path
+        end
+        imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. full_rel
+    end
 
     -- Make HTTP request to imgproxy
     local httpc = http.new()
