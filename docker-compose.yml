@@ -25,7 +25,7 @@ services:
       # Uses round-robin load balancing across servers.
       - IMGPROXY_UPSTREAM=${IMGPROXY_UPSTREAM:-}
       # Basic auth (optional): format "username:password"
-      - OR_AUTH_USER=${OR_AUTH_USER:-}
+      - OR_AUTH_USER=${OR_AUTH_USER:-gallery:test@123}
     entrypoint: ["sh", "/usr/local/openresty/nginx/conf/entrypoint.sh"]
     volumes:
       - ./data:/webdav

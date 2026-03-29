@@ -239,7 +239,7 @@ docker-openresty-tool/
 | `NGX_OVERWRITE_CONFIG` | `false` | `true` 时每次启动都重新渲染 `nginx.conf` |
 | `NGX_APP` | `default_app` | 应用目录名，对应 `conf/<NGX_APP>/` |
 | `OR_ACME` | _(未设置)_ | 非空时启用 ACME 自动证书 |
-| `OR_AUTH_USER` | _(未设置)_ | 格式 `username:password`，启用 HTTP Basic Auth |
+| `OR_AUTH_USER` | `gallery:test@123` | 格式 `username:password`，启用 HTTP Basic Auth |
 | `GID` | `1000` | 容器内 nginx 进程 GID |
 | `UID` | `1000` | 容器内 nginx 进程 UID |
 
