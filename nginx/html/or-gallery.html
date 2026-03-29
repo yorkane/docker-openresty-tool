@@ -2300,18 +2300,34 @@ const Reader = {
     img.alt = item.name;
     img.draggable = false;
 
-    // Use cached image if available
-    const entry = this._getCachedImg(item.url);
-    if (entry.loaded) {
-      img.src = item.url;
-      loadingIndicator.style.display = 'none';
+    // Build thumbnail URL using same logic as gallery cover
+    // Use imgproxy for consistent thumbnail generation
+    let thumbUrl;
+    if (this._isZip) {
+      // ZIP内图片: /imgproxy/zip/<archivePath>/<internalPath>?w=180&h=180&fit=cover&q=75
+      // item.url = /zip/<archivePath>/<internalPath>
+      // Extract internal path from item.url
+      const zipMatch = item.url.match(/^\/zip(\/.*)/);
+      if (zipMatch) {
+        const afterZip = zipMatch[1]; // e.g. /foo/bar.cbz/ch1/page01.jpg
+        const lastSlash = afterZip.lastIndexOf('/');
+        const archivePath = afterZip.slice(0, lastSlash);
+        const internalPath = afterZip.slice(lastSlash + 1);
+        const encodedArchive = archivePath.split('/').map(s => encodeURIComponent(s)).join('/');
+        const encodedInternal = internalPath.split('/').map(s => encodeURIComponent(s)).join('/');
+        thumbUrl = '/imgproxy/zip' + encodedArchive + '/' + encodedInternal + '?w=180&h=180&fit=cover&q=75';
+      } else {
+        thumbUrl = item.url; // fallback
+      }
     } else {
-      this._loadImg(item.url).then(() => {
-        loadingIndicator.style.display = 'none';
-      }).catch(() => {});
-      img.src = item.url;
+      // 普通目录: /img + fileUrl + ?w=180&h=180&fit=cover&q=75
+      // item.url = /webdav/path/to/image.jpg
+      const rawUrl = item.url.replace(/^\/webdav/, '');
+      thumbUrl = '/img' + rawUrl + '?w=180&h=180&fit=cover&q=75';
     }
 
+    img.src = thumbUrl;
+    img.onload = () => { loadingIndicator.style.display = 'none'; };
     img.onerror = () => {
       loadingIndicator.innerHTML = '⚠️';
       loadingIndicator.className = '';
