@@ -256,8 +256,8 @@ local function build_processing_string(w, h, fit, fmt, q)
 end
 
 -- Build imgproxy local:// URL for a file path
--- imgproxy LOCAL_FILESYSTEM_ROOT=/data, so:
---   /data/images/photo.jpg → local:///images/photo.jpg
+-- imgproxy LOCAL_FILESYSTEM_ROOT=/, so:
+--   /data/images/photo.jpg → rel_path="data/images/photo.jpg" → local:///data/images/photo.jpg
 local function build_imgproxy_url(rel_path, w, h, fit, fmt, q)
     local processing = build_processing_string(w, h, fit, fmt, q)
     -- Use triple-slash local:/// to avoid hostname parsing bug
@@ -436,14 +436,16 @@ local function process_local_one(src, dst, params, overwrite, webdav_root)
     end
 
     -- Build imgproxy URL using local:// URL scheme
-    -- Convert absolute path to relative path for local:// URL
-    -- /data/images/photo.jpg → images/photo.jpg
-    local rel_path = src
+    -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:/// + absolute_path works directly
+    -- Normalize /webdav/... → /data/... (same bind mount, keep /data canonical)
+    local abs_path = src
     if webdav_root and src:find("^" .. webdav_root) then
-        rel_path = src:sub(#webdav_root + 2)
-    elseif src:find("^/data/") then
-        rel_path = src:sub(7)  -- remove /data/ prefix
+        abs_path = "/data/" .. src:sub(#webdav_root + 2)
+    elseif src:find("^/webdav/") then
+        abs_path = "/data/" .. src:sub(9)
     end
+    -- Strip leading slash: "/data/foo.jpg" → "data/foo.jpg" for local:///data/foo.jpg
+    local rel_path = abs_path:sub(2)
 
     local processing = build_processing_string(
         params.w and tonumber(params.w),

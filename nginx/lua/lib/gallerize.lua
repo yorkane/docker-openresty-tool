@@ -294,9 +294,10 @@ end
 -- Image processing (via imgproxy HTTP API)
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- Process single image using imgproxy HTTP raw upload
+-- Process single image using imgproxy HTTP local file access
+-- imgproxy reads directly from local filesystem via local:// URL scheme
 -- Returns: ok (bool), result_or_error
-local function process_image(src_path, dst_path, params)
+local function process_image(src_path, dst_path, params, webdav_root)
     -- Read source file
     local src_f = io.open(src_path, "rb")
     if not src_f then
@@ -320,12 +321,23 @@ local function process_image(src_path, dst_path, params)
         return true, {skipped = true, reason = reason}
     end
 
-    -- Build imgproxy URL for raw upload
+    -- Build absolute path for imgproxy local:// access
+    -- imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:/// + absolute_path works directly
+    -- Normalize: /webdav/foo → /data/foo (both are the same bind mount)
+    local abs_path = src_path
+    if webdav_root and src_path:find("^" .. webdav_root) then
+        abs_path = "/data/" .. src_path:sub(#webdav_root + 2)
+    elseif src_path:find("^/webdav/") then
+        abs_path = "/data/" .. src_path:sub(9)
+    end
+    -- abs_path already starts with /, strip leading slash for local:/// construction
+    local rel_path = abs_path:sub(2)  -- "/data/foo.jpg" → "data/foo.jpg"
+
+    -- Build imgproxy URL using local:// scheme (imgproxy reads directly from filesystem)
     local processing = imgproxy_processing_string(
         params.w, params.h, params.fit, params.fmt, params.q
     )
-    local imgproxy_path = "/insecure/" .. processing .. "/raw"
-    local mime = imgproc.MIME_OF_EXT[ext] or "application/octet-stream"
+    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
 
     -- Connect to imgproxy
     local httpc = http.new()
@@ -337,14 +349,11 @@ local function process_image(src_path, dst_path, params)
     end
 
     local proxy_res, err = httpc:request({
-        method = "POST",
+        method = "GET",
         path = imgproxy_path,
         headers = {
             ["Host"] = "localhost",
-            ["Content-Type"] = mime,
-            ["Content-Length"] = tostring(#body),
-        },
-        body = body,
+        }
     })
 
     if not proxy_res then

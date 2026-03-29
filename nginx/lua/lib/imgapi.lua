@@ -3,9 +3,14 @@
 -- Accepts raw image bytes in request body, forwards to imgproxy for processing.
 -- Parameters are identical to /img/ (w, h, fit, crop, fmt, q, ignore_exts).
 --
--- Architecture note:
--- imgproxy开源版不支持/raw端点，因此本实现先将上传文件保存到临时目录，
--- 再通过imgproxy的local:// URL进行处理，最后清理临时文件。
+-- Architecture: RAM Disk Bridge
+-- imgproxy开源版不支持直接POST二进制流。本实现利用Linux内存盘(/dev/shm)作为高性能桥接：
+--   1. OpenResty接收POST图片二进制流
+--   2. 写入/mnt/ramdisk/.imgapi-tmp/ (共享tmpfs volume，零磁盘I/O)
+--   3. 调用imgproxy: local:///mnt/ramdisk/.imgapi-tmp/file
+--      (imgproxy LOCAL_FILESYSTEM_ROOT=/, 所以此路径即为绝对路径)
+--   4. imgproxy从内存盘读取、处理、返回结果
+--   5. OpenResty返回结果并立即删除临时文件
 --
 -- URL:
 --   POST /api/img?w=200&h=150&fit=cover&fmt=webp&q=80
@@ -41,11 +46,15 @@ local http = require("resty.http")
 
 local IMGPROXY_HOST = os.getenv("IMGPROXY_HOST") or "imgproxy"
 local IMGPROXY_PORT = os.getenv("IMGPROXY_PORT") or "8080"
--- Use /data/.imgapi-tmp for temp files (shared between yot and imgproxy containers)
-local TMP_DIR = "/data/.imgapi-tmp"
+-- RAM Disk Bridge for zero disk I/O:
+--   yot container:      writes to /mnt/ramdisk/.imgapi-tmp/ (shared named tmpfs volume)
+--   imgproxy container: same volume mounted at /mnt/ramdisk/
+--   imgproxy LOCAL_FILESYSTEM_ROOT=/, so local:///mnt/ramdisk/.imgapi-tmp/file → /mnt/ramdisk/.imgapi-tmp/file
+local TMP_DIR     = "/mnt/ramdisk/.imgapi-tmp"
+local TMP_REL_DIR = "mnt/ramdisk/.imgapi-tmp"  -- relative path for imgproxy local:// URL (no leading /)
 
--- Ensure tmp directory exists
-os.execute("mkdir -p " .. TMP_DIR)
+-- Ensure tmp directory exists with correct permissions (writable by nginx workers)
+os.execute("mkdir -p " .. TMP_DIR .. " && chmod 1777 " .. TMP_DIR)
 
 -- ── Map fit modes to imgproxy resizing_type ─────────────────────────────────
 
@@ -93,28 +102,31 @@ end
 -- ── Save body to temp file ─────────────────────────────────────────────────
 
 local function save_to_temp_file(body, ext)
-    -- Ensure tmp directory exists
-    os.execute("mkdir -p " .. TMP_DIR)
+    -- Ensure tmp directory exists and is writable by all users (like /tmp, sticky bit)
+    os.execute("mkdir -p " .. TMP_DIR .. " && chmod 1777 " .. TMP_DIR)
 
     local unique_id = ngx.now() * 1000 + math.random(1000)
     local filename = string.format("%d", unique_id) .. "." .. ext
-    local tmp_path = TMP_DIR .. "/" .. filename
-    local f, err = io.open(tmp_path, "wb")
+    local abs_path = TMP_DIR .. "/" .. filename
+    local f, err = io.open(abs_path, "wb")
     if not f then
-        return nil, "failed to open temp file: " .. tostring(err)
+        return nil, nil, "failed to open temp file: " .. tostring(err)
     end
-    local ok, err = f:write(body)
+    local ok, werr = f:write(body)
     f:close()
     if not ok then
-        return nil, "failed to write temp file: " .. tostring(err)
+        return nil, nil, "failed to write temp file: " .. tostring(werr)
     end
-    -- Return path relative to IMGPROXY_LOCAL_FILESYSTEM_ROOT (/data)
-    return ".imgapi-tmp/" .. filename
+    -- Return both absolute path (for cleanup) and relative path (for imgproxy local:// URL)
+    -- imgproxy LOCAL_FILESYSTEM_ROOT=/data, mounted at /data/ramdisk in imgproxy container
+    -- So local:///ramdisk/.imgapi-tmp/xxx.png → /data/ramdisk/.imgapi-tmp/xxx.png
+    local rel_path = TMP_REL_DIR .. "/" .. filename
+    return abs_path, rel_path
 end
 
 -- ── Process via imgproxy ───────────────────────────────────────────────────
 
-local function process_via_imgproxy(tmp_path, processing)
+local function process_via_imgproxy(rel_path, processing)
     local httpc = http.new()
     httpc:set_timeout(30000)
 
@@ -123,8 +135,10 @@ local function process_via_imgproxy(tmp_path, processing)
         return nil, "failed to connect to imgproxy: " .. err
     end
 
-    -- Build imgproxy URL: /insecure/<processing>/plain/local:///<path>
-    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. tmp_path
+    -- Build imgproxy URL: /insecure/<processing>/plain/local:///<rel_path>
+    -- rel_path is relative to imgproxy's LOCAL_FILESYSTEM_ROOT (/data):
+    --   "ramdisk/.imgapi-tmp/xxx.png" → imgproxy reads /data/ramdisk/.imgapi-tmp/xxx.png
+    local imgproxy_path = "/insecure/" .. processing .. "/plain/local:///" .. rel_path
 
     local proxy_res, err = httpc:request({
         method = "GET",
@@ -232,7 +246,7 @@ function _M.handle()
     local ext = src_ext
     if ext == "" or ext == "jpeg" then ext = "jpg" end
 
-    local tmp_path, err = save_to_temp_file(body, ext)
+    local tmp_path, rel_path, err = save_to_temp_file(body, ext)
     if not tmp_path then
         ngx.log(ngx.ERR, "[imgapi] failed to save temp file: ", err)
         ngx.status = 500
@@ -245,16 +259,16 @@ function _M.handle()
     local processing = build_processing_string(w, h, fit, fmt, q)
 
     -- ── Process via imgproxy ────────────────────────────────────────────────
-    local result, err, err_status = process_via_imgproxy(tmp_path, processing)
+    local result, imgproxy_err, err_status = process_via_imgproxy(rel_path, processing)
 
     -- ── Clean up temp file ─────────────────────────────────────────────────
     os.remove(tmp_path)
 
     if not result then
-        ngx.log(ngx.ERR, "[imgapi] imgproxy error: ", err)
+        ngx.log(ngx.ERR, "[imgapi] imgproxy error: ", imgproxy_err)
         ngx.status = err_status or 502
         ngx.header["Content-Type"] = "application/json; charset=utf-8"
-        ngx.print('{"error":"bad_gateway","message":"' .. ngx.escape_uri(err) .. '"}')
+        ngx.print('{"error":"bad_gateway","message":"' .. ngx.escape_uri(imgproxy_err) .. '"}')
         return ngx.exit(ngx.status)
     end
 

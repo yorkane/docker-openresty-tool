@@ -1,7 +1,7 @@
 version: "3"
 services:
   yot:
-    image: ghcr.io/yorkane/docker-openresty-tool:latest
+    image: yot:test
     container_name: yot
     environment:
       - NGX_OVERWRITE_CONFIG=true
@@ -32,6 +32,9 @@ services:
       - ./nginx/conf:/usr/local/openresty/nginx/conf
       - ./nginx/html:/usr/local/openresty/nginx/html
       - ./nginx/lua:/usr/local/openresty/nginx/lua
+      # RAM disk for imgproxy temp files (zero disk I/O)
+      # Mount at /mnt/ramdisk - imgproxy's local:// URL treats /mnt/... as absolute path
+      - ramdisk:/mnt/ramdisk
     restart: unless-stopped
     ports:
       - "5080:80"
@@ -43,7 +46,10 @@ services:
     container_name: imgproxy
     environment:
       # Performance-first: disable all caches, maximize workers
-      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/data
+      # LOCAL_FILESYSTEM_ROOT=/ allows imgproxy to access any absolute path:
+      #   local:///data/images/photo.jpg → /data/images/photo.jpg (webdav files)
+      #   local:///mnt/ramdisk/.imgapi-tmp/x.jpg → /mnt/ramdisk/.imgapi-tmp/x.jpg (POST uploads)
+      - IMGPROXY_LOCAL_FILESYSTEM_ROOT=/
       - IMGPROXY_DISABLE_CACHE=true
       - IMGPROXY_WORKERS=1                 # 1 = minimal worker, yot handles caching
       - IMGPROXY_CONCURRENCY=0              # 0 = auto (unlimited concurrent operations)
@@ -57,6 +63,10 @@ services:
       - IMGPROXY_FAMILY=0                   # IPv4 only
     volumes:
       - ./data:/data:ro                     # Read-only access to webdav directory
+      # RAM disk for imgproxy temp files (zero disk I/O)
+      # yot writes POST images to /mnt/ramdisk/.imgapi-tmp/
+      # imgproxy reads via local:///mnt/ramdisk/.imgapi-tmp/file (absolute path, ROOT=/)
+      - ramdisk:/mnt/ramdisk
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
@@ -67,3 +77,13 @@ services:
 
 volumes:
   imgproxy_cache:
+  # Shared RAM disk (tmpfs) for imgproxy temp files - zero disk I/O
+  # yot container:     writes POST temp files to /mnt/ramdisk/.imgapi-tmp/
+  # imgproxy container: mounts same volume at /data/ramdisk/ (LOCAL_FILESYSTEM_ROOT=/data)
+  # imgproxy URL:      local:///ramdisk/.imgapi-tmp/file → reads /data/ramdisk/.imgapi-tmp/file
+  ramdisk:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=512m,uid=1000,gid=1000"

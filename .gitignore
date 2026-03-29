@@ -16,6 +16,16 @@ luac.out
 /data/testdir/
 /data/test*
 /data/===*
+/data/.imgapi-tmp/
+/data/.imgproxy-tmp/
+/data/batch_out/
+/data/batch_test/
+/data/images/*.webp
+/data/images/*-batch*.png
+/data/images/*-test*.png
+/data/images/*-thumb*.png
+/nginx/html/libs/imgproxy
+/nginx/html/libs/imgproxy-bin
 # luarocks build files
 *.src.rock
 *.zip
