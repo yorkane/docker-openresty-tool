@@ -27,13 +27,16 @@ local function ip_to_number(ip)
     return (parts[1] * 16777216) + (parts[2] * 65536) + (parts[3] * 256) + parts[4]
 end
 
+local bit = require("bit")
+local band, lshift = bit.band, bit.lshift
+
 local function match_ip(cidr, client_ip)
     local ip, mask = parse_cidr(cidr)
     local ip_num = ip_to_number(ip)
     local client_num = ip_to_number(client_ip)
     if not ip_num or not client_num then return false end
-    local mask_bits = 0xFFFFFFFF << (32 - mask)
-    return (ip_num & mask_bits) == (client_num & mask_bits)
+    local mask_bits = lshift(0xFFFFFFFF, 32 - mask)
+    return band(ip_num, mask_bits) == band(client_num, mask_bits)
 end
 
 -- Check if client IP is in the whitelist (comma-separated IPs/IP ranges)
