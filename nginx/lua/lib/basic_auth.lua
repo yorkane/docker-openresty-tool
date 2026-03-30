@@ -156,18 +156,32 @@ function _M.handle(conf)
     end
 
     -- Check Bearer token auth (allows bypassing IP whitelist for trusted services like imgproxy)
-    -- Supports both X-Internal-Auth header (legacy) and Authorization: Bearer token
+    -- Supports:
+    --   1. Authorization: Bearer <token> header
+    --   2. X-Internal-Auth header (legacy)
+    --   3. User-Agent header matching OR_AUTH_BEARER (for imgproxy)
     local bearer_token = env.OR_AUTH_BEARER or ""
     local internal_auth_header = env.OR_INTERNAL_AUTH_HEADER or ""  -- legacy fallback
     local request_bearer = ngx.var.http_authorization or ""
+    local request_ua = ngx.var.http_user_agent or ""
+
+    -- Check Bearer token in Authorization header
     if request_bearer:match("^Bearer%s+(.+)") then
         local token = request_bearer:match("^Bearer%s+(.+)")
         if bearer_token ~= "" and token == bearer_token then
             ngx.log(ngx.DEBUG, "[basic_auth] Bearer token matched, allowing")
             return ip
         end
-    elseif internal_auth_header ~= "" then
-        -- Legacy X-Internal-Auth header support
+    end
+
+    -- Check User-Agent matching OR_AUTH_BEARER (for imgproxy requests)
+    if bearer_token ~= "" and request_ua == bearer_token then
+        ngx.log(ngx.DEBUG, "[basic_auth] User-Agent matched OR_AUTH_BEARER, allowing")
+        return ip
+    end
+
+    -- Legacy X-Internal-Auth header support
+    if internal_auth_header ~= "" then
         local request_internal_auth = ngx.var.http_x_internal_auth or ""
         if request_internal_auth == internal_auth_header then
             ngx.log(ngx.DEBUG, "[basic_auth] Legacy internal auth header matched, allowing")
