@@ -11,9 +11,13 @@ local _M = {}
 
 local imgproxy = require("lib.imgproxy")
 
+-- Load env module for environment variables
+local ok_env, env_loader = pcall(require, "env")
+local env = (ok_env and env_loader) or {}
+
 -- Internal auth header for imgproxy → yot requests
 -- This header allows imgproxy to bypass yot's IP whitelist
-local INTERNAL_AUTH_HEADER = os.getenv("OR_INTERNAL_AUTH_HEADER") or ""
+local INTERNAL_AUTH_HEADER = env.OR_INTERNAL_AUTH_HEADER or ""
 
 -- ── Public API ───────────────────────────────────────────────────────────────
 

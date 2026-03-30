@@ -156,7 +156,7 @@ function _M.handle(conf)
     end
 
     -- Check internal auth header (allows bypassing IP whitelist for trusted services like imgproxy)
-    local internal_auth_header = os.getenv("OR_INTERNAL_AUTH_HEADER") or ""
+    local internal_auth_header = env.OR_INTERNAL_AUTH_HEADER or ""
     local request_internal_auth = ngx.var.http_x_internal_auth or ""
     if internal_auth_header ~= "" and request_internal_auth == internal_auth_header then
         ngx.log(ngx.DEBUG, "[basic_auth] Internal auth header matched, allowing")
@@ -164,8 +164,8 @@ function _M.handle(conf)
     end
     local ua = ngx.req.get_headers(100)[conf.auth_key or 'x-bakey'] or 0
 
-    -- Build effective IP whitelist: OR_AUTH_IP_WHITELIST + IMGPROXY_UPSTREAM IPs
-    local env_whitelist = os.getenv("OR_AUTH_IP_WHITELIST") or ""
+    -- Build effective IP whitelist: OR_AUTH_IP_WHITELIST + OR_IMGPROXY_UPSTREAM IPs
+    local env_whitelist = env.OR_AUTH_IP_WHITELIST or ""
     local upstream_ips = get_imgproxy_upstream_ips()
     local whitelist = env_whitelist
     if upstream_ips ~= "" then
@@ -177,7 +177,7 @@ function _M.handle(conf)
     end
 
     -- DEBUG: log whitelist info
-    ngx.log(ngx.DEBUG, "[basic_auth] client_ip=", ip, " upstream=", os.getenv("IMGPROXY_UPSTREAM") or "",
+    ngx.log(ngx.DEBUG, "[basic_auth] client_ip=", ip, " upstream=", env.OR_IMGPROXY_UPSTREAM or "",
             " whitelist=", whitelist, " env_whitelist=", env_whitelist, " upstream_ips=", upstream_ips)
 
     -- Check whitelist first (whitelisted IPs skip auth)
