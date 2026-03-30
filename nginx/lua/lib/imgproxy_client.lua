@@ -17,7 +17,9 @@ local env = (ok_env and env_loader) or {}
 
 -- Internal auth header for imgproxy → yot requests
 -- This header allows imgproxy to bypass yot's IP whitelist
-local INTERNAL_AUTH_HEADER = env.OR_INTERNAL_AUTH_HEADER or ""
+-- Supports both X-Internal-Auth (legacy) and Authorization: Bearer token
+local INTERNAL_AUTH_HEADER = env.OR_INTERNAL_AUTH_HEADER or ""  -- legacy
+local INTERNAL_AUTH_BEARER = env.OR_AUTH_BEARER or ""
 
 -- ── Public API ───────────────────────────────────────────────────────────────
 
@@ -45,12 +47,12 @@ function _M.process_http(full_url, params, extra_headers_arg)
     -- imgproxy_path: /insecure/<processing>/plain/http://<source_url>
     local imgproxy_path = imgproxy.build_http_url(source_url, processing)
 
-    -- Merge extra headers: module-level INTERNAL_AUTH_HEADER + caller-provided headers
+    -- Merge extra headers: module-level INTERNAL_AUTH_BEARER + caller-provided headers
     local extra_headers = nil
-    if INTERNAL_AUTH_HEADER ~= "" or extra_headers_arg then
+    if INTERNAL_AUTH_BEARER ~= "" or extra_headers_arg then
         extra_headers = {}
-        if INTERNAL_AUTH_HEADER ~= "" then
-            extra_headers["X-Internal-Auth"] = INTERNAL_AUTH_HEADER
+        if INTERNAL_AUTH_BEARER ~= "" then
+            extra_headers["Authorization"] = "Bearer " .. INTERNAL_AUTH_BEARER
         end
         if extra_headers_arg then
             for k, v in pairs(extra_headers_arg) do
@@ -70,8 +72,8 @@ end
 function _M.process_local(webdav_root, rel_path, params, use_webdav)
     -- Add internal auth header if configured (allows bypassing yot's IP whitelist)
     local extra_headers = nil
-    if INTERNAL_AUTH_HEADER ~= "" then
-        extra_headers = {["X-Internal-Auth"] = INTERNAL_AUTH_HEADER}
+    if INTERNAL_AUTH_BEARER ~= "" then
+        extra_headers = {["Authorization"] = "Bearer " .. INTERNAL_AUTH_BEARER}
     end
     return imgproxy.process_local(webdav_root, rel_path, params, use_webdav, extra_headers)
 end
