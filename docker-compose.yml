@@ -47,6 +47,7 @@ services:
     restart: unless-stopped
     ports:
       - "${YOT_HTTP_PORT:-5080}:80"
+      - "${OR_NO_AUTH_PORT:-5082}:82"
     depends_on:
       - imgproxy
 
@@ -77,7 +78,7 @@ services:
       - IMGPROXY_FAMILY=${IMGPROXY_FAMILY:-0}
       # WebDAV access to yot for ZIP/CBZ transparent processing
       - IMGPROXY_WEBDAV_ROOT=${IMGPROXY_WEBDAV_ROOT:-/webdav}
-      - IMGPROXY_WEBDAV_ENDPOINT=${IMGPROXY_WEBDAV_ENDPOINT:-http://yot:5080}
+      - IMGPROXY_WEBDAV_ENDPOINT=${IMGPROXY_WEBDAV_ENDPOINT:-http://yot:5082}
       - IMGPROXY_WEBDAV_USER=${IMGPROXY_WEBDAV_USER:-}
       - IMGPROXY_WEBDAV_PASSWORD=${IMGPROXY_WEBDAV_PASSWORD:-}
     volumes:
