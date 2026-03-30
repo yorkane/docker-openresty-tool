@@ -25,7 +25,8 @@ local INTERNAL_AUTH_HEADER = env.OR_INTERNAL_AUTH_HEADER or ""
 -- full_url: the complete HTTP URL to fetch the source image from
 -- e.g., "http://yot:5080/zip/archives/book.cbz/images/cover.jpg?w=360&h=504&fit=cover&q=82"
 -- params: {w, h, fit, fmt, q}
-function _M.process_http(full_url, params)
+-- extra_headers: optional additional headers for the request
+function _M.process_http(full_url, params, extra_headers_arg)
     local w = params.w
     local h = params.h
     local fit = params.fit or "contain"
@@ -44,10 +45,18 @@ function _M.process_http(full_url, params)
     -- imgproxy_path: /insecure/<processing>/plain/http://<source_url>
     local imgproxy_path = imgproxy.build_http_url(source_url, processing)
 
-    -- Add internal auth header if configured (allows bypassing yot's IP whitelist)
+    -- Merge extra headers: module-level INTERNAL_AUTH_HEADER + caller-provided headers
     local extra_headers = nil
-    if INTERNAL_AUTH_HEADER ~= "" then
-        extra_headers = {["X-Internal-Auth"] = INTERNAL_AUTH_HEADER}
+    if INTERNAL_AUTH_HEADER ~= "" or extra_headers_arg then
+        extra_headers = {}
+        if INTERNAL_AUTH_HEADER ~= "" then
+            extra_headers["X-Internal-Auth"] = INTERNAL_AUTH_HEADER
+        end
+        if extra_headers_arg then
+            for k, v in pairs(extra_headers_arg) do
+                extra_headers[k] = v
+            end
+        end
     end
 
     return imgproxy.request(imgproxy_path, nil, extra_headers)
