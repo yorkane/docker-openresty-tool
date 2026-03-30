@@ -72,3 +72,6 @@ luac.out
 # Config files (use .example files as templates)
 nginx/conf/nginx.conf
 nginx/conf/nginx.conf.example
+# Generated from templates (envsubst at container startup)
+nginx/conf/default_app/img.conf
+nginx/conf/inc/img_cache.set
