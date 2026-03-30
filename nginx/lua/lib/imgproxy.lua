@@ -145,6 +145,8 @@ function _M.build_http_url(source_url, processing)
     -- encoded path segments (e.g. %E4BC9A → é) as escape sequences.
     -- Each % in %XX must be escaped as %25.
     local encoded_source = source_url:gsub("%%", "%%25")
+    ngx.log(ngx.INFO, "[imgproxy] build_http_url: original_source=", source_url,
+            " encoded_source=", encoded_source)
     return "/insecure/" .. processing .. "/plain/" .. encoded_source
 end
 
@@ -173,7 +175,7 @@ function _M.request(imgproxy_path, timeout_ms, extra_headers)
     -- DEBUG: log exact request details including raw OR_IMGPROXY_UPSTREAM env var
     local ok_env, env = pcall(require, "env")
     local env_upstream = (ok_env and env and env.OR_IMGPROXY_UPSTREAM) or "nil"
-    ngx.log(ngx.DEBUG, "[imgproxy] OR_IMGPROXY_UPSTREAM=", env_upstream,
+    ngx.log(ngx.INFO, "[imgproxy] OR_IMGPROXY_UPSTREAM=", env_upstream,
             " using server=", server.host, ":", server.port,
             " imgproxy_path=", imgproxy_path,
             " extra_headers=", extra_headers and "yes" or "no")
