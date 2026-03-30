@@ -161,15 +161,18 @@ end
 function _M.request(imgproxy_path, timeout_ms, extra_headers)
     timeout_ms = timeout_ms or 30000
 
-    -- DEBUG: log exact request details
-    ngx.log(ngx.DEBUG, "[imgproxy] request: imgproxy_path=", imgproxy_path,
-            " server=", get_next_server().host, ":", get_next_server().port,
+    -- Get server (only once to avoid pool index issues)
+    local server = get_next_server()
+
+    -- DEBUG: log exact request details including raw IMGPROXY_UPSTREAM env var
+    ngx.log(ngx.DEBUG, "[imgproxy] IMGPROXY_UPSTREAM=", os.getenv("IMGPROXY_UPSTREAM") or "nil",
+            " using server=", server.host, ":", server.port,
+            " imgproxy_path=", imgproxy_path,
             " extra_headers=", extra_headers and "yes" or "no")
 
     local httpc = http.new()
     httpc:set_timeout(timeout_ms)
 
-    local server = get_next_server()
     local ok, err = httpc:connect(server.host, server.port)
     if not ok then
         return nil, "failed to connect to imgproxy: " .. err
