@@ -289,23 +289,28 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav, extra_heade
             full_rel = rel_path
         end
 
+        -- Decode URL-encoded characters for filesystem access
+        -- rel_path from nginx URI contains encoded chars (e.g. %20 for space)
+        -- but filesystem paths use actual characters, so we need to decode first
+        local full_rel_decoded = ngx.unescape_uri(full_rel)
+
         -- DEBUG: log full path before content detection
-        ngx.log(ngx.DEBUG, "[imgproxy] full_rel (before detection)=", full_rel)
+        ngx.log(ngx.DEBUG, "[imgproxy] full_rel (before detection)=", full_rel, " (decoded)=", full_rel_decoded)
 
         -- Detect actual content type to handle files with wrong extensions (e.g., .jfif that's actually WebP)
         -- imgproxy uses the file extension to determine how to DECODE the source image,
         -- so .jfif containing WebP data would fail. Fix by using .webp extension when content is WebP.
-        local detected = _M.detect_content_type("/" .. full_rel)
+        local detected = _M.detect_content_type(full_rel_decoded)
         if detected == "webp" then
             -- Replace extension with .webp so imgproxy decodes it correctly
-            full_rel = full_rel:gsub("%.[^.]+$", ".webp")
+            full_rel_decoded = full_rel_decoded:gsub("%.[^.]+$", ".webp")
         elseif detected == "jpeg" then
-            full_rel = full_rel:gsub("%.[^.]+$", ".jpg")
+            full_rel_decoded = full_rel_decoded:gsub("%.[^.]+$", ".jpg")
         end
 
-        ngx.log(ngx.DEBUG, "[imgproxy] full_rel (after detection)=", full_rel, " imgproxy_path=", _M.build_local_url(full_rel, processing))
+        ngx.log(ngx.DEBUG, "[imgproxy] full_rel (after detection)=", full_rel_decoded, " imgproxy_path=", _M.build_local_url(full_rel_decoded, processing))
 
-        imgproxy_path = _M.build_local_url(full_rel, processing)
+        imgproxy_path = _M.build_local_url(full_rel_decoded, processing)
     end
 
     return _M.request(imgproxy_path, nil, extra_headers)
