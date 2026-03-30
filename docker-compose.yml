@@ -24,6 +24,8 @@ services:
       #   OR_IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
       # Uses round-robin load balancing across servers.
       - OR_IMGPROXY_UPSTREAM=${OR_IMGPROXY_UPSTREAM:-}
+      # Internal address imgproxy uses to fetch images from yot (default: http://yot:80)
+      - OR_IMGPROXY_WEBDAV_ENDPOINT=${OR_IMGPROXY_WEBDAV_ENDPOINT:-http://yot:80}
       # IP whitelist for免认证访问 (逗号分隔，支持IP段如 192.168.1.0/24)
       # OR_IMGPROXY_UPSTREAM 中的IP会自动加入白名单
       - OR_AUTH_IP_WHITELIST=${OR_AUTH_IP_WHITELIST:-}
