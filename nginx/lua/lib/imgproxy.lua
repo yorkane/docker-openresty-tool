@@ -124,8 +124,15 @@ end
 -- rel_path: path relative to imgproxy's LOCAL_FILESYSTEM_ROOT (e.g. "data/images/photo.jpg")
 -- processing: processing string from build_processing()
 function _M.build_local_url(rel_path, processing)
+    -- URL-encode the path for imgproxy's local:// URL scheme
+    -- Each path segment is encoded individually to preserve slashes
+    local encoded_path = {}
+    for segment in rel_path:gmatch("([^/]+)") do
+        table.insert(encoded_path, ngx.escape_uri(segment))
+    end
+    local encoded_full = table.concat(encoded_path, "/")
     -- Use triple-slash local:/// to avoid hostname parsing bug
-    return "/insecure/" .. processing .. "/plain/local:///" .. rel_path
+    return "/insecure/" .. processing .. "/plain/local:///" .. encoded_full
 end
 
 -- Build imgproxy HTTP source URL
@@ -153,6 +160,11 @@ end
 -- Returns: result {status, headers, body} or nil, error, status
 function _M.request(imgproxy_path, timeout_ms, extra_headers)
     timeout_ms = timeout_ms or 30000
+
+    -- DEBUG: log exact request details
+    ngx.log(ngx.DEBUG, "[imgproxy] request: imgproxy_path=", imgproxy_path,
+            " server=", get_next_server().host, ":", get_next_server().port,
+            " extra_headers=", extra_headers and "yes" or "no")
 
     local httpc = http.new()
     httpc:set_timeout(timeout_ms)
@@ -250,6 +262,9 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav, extra_heade
     local fmt = params.fmt or ""
     local q = params.q or 82
 
+    -- DEBUG: log the incoming path
+    ngx.log(ngx.DEBUG, "[imgproxy] process_local: rel_path=", rel_path, " webdav_root=", webdav_root or "nil")
+
     local processing = _M.build_processing(w, h, fit, fmt, q)
     local imgproxy_path
 
@@ -267,6 +282,9 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav, extra_heade
             full_rel = rel_path
         end
 
+        -- DEBUG: log full path before content detection
+        ngx.log(ngx.DEBUG, "[imgproxy] full_rel (before detection)=", full_rel)
+
         -- Detect actual content type to handle files with wrong extensions (e.g., .jfif that's actually WebP)
         -- imgproxy uses the file extension to determine how to DECODE the source image,
         -- so .jfif containing WebP data would fail. Fix by using .webp extension when content is WebP.
@@ -277,6 +295,8 @@ function _M.process_local(webdav_root, rel_path, params, use_webdav, extra_heade
         elseif detected == "jpeg" then
             full_rel = full_rel:gsub("%.[^.]+$", ".jpg")
         end
+
+        ngx.log(ngx.DEBUG, "[imgproxy] full_rel (after detection)=", full_rel, " imgproxy_path=", _M.build_local_url(full_rel, processing))
 
         imgproxy_path = _M.build_local_url(full_rel, processing)
     end
