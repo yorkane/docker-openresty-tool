@@ -141,7 +141,11 @@ end
 -- source_url: full HTTP URL to the source image
 -- processing: processing string from build_processing()
 function _M.build_http_url(source_url, processing)
-    return "/insecure/" .. processing .. "/plain/" .. source_url
+    -- Percent-encode the source URL to prevent imgproxy from misinterpreting
+    -- encoded path segments (e.g. %E4BC9A → é) as escape sequences.
+    -- Each % in %XX must be escaped as %25.
+    local encoded_source = source_url:gsub("%%", "%%25")
+    return "/insecure/" .. processing .. "/plain/" .. encoded_source
 end
 
 -- Build imgproxy webdav:// URL
