@@ -239,7 +239,7 @@ docker-openresty-tool/
 | `NGX_OVERWRITE_CONFIG` | `false` | `true` 时每次启动都重新渲染 `nginx.conf` |
 | `NGX_APP` | `default_app` | 应用目录名，对应 `conf/<NGX_APP>/` |
 | `OR_ACME` | _(未设置)_ | 非空时启用 ACME 自动证书 |
-| `OR_AUTH_IP_WHITELIST` | _(未设置)_ | 免认证 IP 白名单，逗号分隔，支持 IP 段如 `192.168.1.0/24`，`IMGPROXY_UPSTREAM` 中的 IP 会自动加入 |
+| `OR_AUTH_IP_WHITELIST` | _(未设置)_ | 免认证 IP 白名单，逗号分隔，支持 IP 段如 `192.168.1.0/24`，`OR_IMGPROXY_UPSTREAM` 中的 IP 会自动加入 |
 | `OR_AUTH_USER` | `gallery:test@123` | 格式 `username:password`，启用 HTTP Basic Auth |
 | `GID` | `1000` | 容器内 nginx 进程 GID |
 | `UID` | `1000` | 容器内 nginx 进程 UID |
@@ -449,7 +449,7 @@ environment:
   - OR_AUTH_IP_WHITELIST=192.168.1.0/24,10.0.0.5,172.16.0.0/12
 ```
 
-**注意**：`IMGPROXY_UPSTREAM` 中指定的 IP（如 `192.168.1.12:5081`）会自动加入白名单，无需重复配置。
+**注意**：`OR_IMGPROXY_UPSTREAM` 中指定的 IP（如 `192.168.1.12:5081`）会自动加入白名单，无需重复配置。
 
 凭据会被自动写入 `lua/env.lua`，由 `lib/basic_auth.lua` 在 Lua 层面进行校验（Base64 解码对比），无需额外的 `.htpasswd` 文件。
 

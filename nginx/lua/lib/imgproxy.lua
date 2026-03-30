@@ -17,11 +17,13 @@ local http = require("resty.http")
 -- Upstream Server Pool
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- Parse IMGPROXY_UPSTREAM env var (comma-separated list of host:port)
+-- Parse OR_IMGPROXY_UPSTREAM env var (comma-separated list of host:port)
 -- Returns: array of {host, port} tables
--- If IMGPROXY_UPSTREAM is not set, uses default imgproxy:8080
+-- If OR_IMGPROXY_UPSTREAM is not set, uses default imgproxy:8080
 local function parse_upstream()
-    local upstream_str = os.getenv("IMGPROXY_UPSTREAM")
+    local ok, env = pcall(require, "env")
+    env = (ok and env) or {}
+    local upstream_str = env.OR_IMGPROXY_UPSTREAM or ""
 
     -- Default: single server using Docker Compose service name
     if not upstream_str or upstream_str == "" then
@@ -164,8 +166,10 @@ function _M.request(imgproxy_path, timeout_ms, extra_headers)
     -- Get server (only once to avoid pool index issues)
     local server = get_next_server()
 
-    -- DEBUG: log exact request details including raw IMGPROXY_UPSTREAM env var
-    ngx.log(ngx.DEBUG, "[imgproxy] IMGPROXY_UPSTREAM=", os.getenv("IMGPROXY_UPSTREAM") or "nil",
+    -- DEBUG: log exact request details including raw OR_IMGPROXY_UPSTREAM env var
+    local ok_env, env = pcall(require, "env")
+    local env_upstream = (ok_env and env and env.OR_IMGPROXY_UPSTREAM) or "nil"
+    ngx.log(ngx.DEBUG, "[imgproxy] OR_IMGPROXY_UPSTREAM=", env_upstream,
             " using server=", server.host, ":", server.port,
             " imgproxy_path=", imgproxy_path,
             " extra_headers=", extra_headers and "yes" or "no")

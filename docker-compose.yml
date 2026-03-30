@@ -20,12 +20,12 @@ services:
       - OR_IMG_CACHE_BACKGROUND_UPDATE=${OR_IMG_CACHE_BACKGROUND_UPDATE:-on}
       - OR_IMG_CACHE_USE_STALE=${OR_IMG_CACHE_USE_STALE:-error timeout updating http_500 http_502 http_503 http_504}
       # imgproxy upstream (yot handles all caching, imgproxy has cache disabled)
-      # Supports multiple upstream servers via IMGPROXY_UPSTREAM env var:
-      #   IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
+      # Supports multiple upstream servers via OR_IMGPROXY_UPSTREAM env var:
+      #   OR_IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
       # Uses round-robin load balancing across servers.
-      - IMGPROXY_UPSTREAM=${IMGPROXY_UPSTREAM:-}
+      - OR_IMGPROXY_UPSTREAM=${OR_IMGPROXY_UPSTREAM:-}
       # IP whitelist for免认证访问 (逗号分隔，支持IP段如 192.168.1.0/24)
-      # IMGPROXY_UPSTREAM 中的IP会自动加入白名单
+      # OR_IMGPROXY_UPSTREAM 中的IP会自动加入白名单
       - OR_AUTH_IP_WHITELIST=${OR_AUTH_IP_WHITELIST:-}
       # Internal auth header for trusted services (imgproxy) to bypass IP whitelist
       - OR_INTERNAL_AUTH_HEADER=${OR_INTERNAL_AUTH_HEADER:-}

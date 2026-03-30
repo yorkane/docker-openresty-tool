@@ -533,7 +533,7 @@ curl -X POST http://localhost:5080/api/upload/archives/2026/march/report.pdf \
 将图片二进制直接 POST 到此接口，服务端通过 imgproxy 完成缩放、裁切、格式转换后立即返回处理结果。  
 **参数与 `/img/` 完全一致**，但不使用 nginx proxy_cache，专为需要最高吞吐量的实时处理场景设计。
 
-内部通过 **HTTP API** 与 imgproxy 通信（使用 `IMGPROXY_UPSTREAM` 配置，默认 `imgproxy:8080`），使用 imgproxy 的 raw upload 模式。
+内部通过 **HTTP API** 与 imgproxy 通信（使用 `OR_IMGPROXY_UPSTREAM` 配置，默认 `imgproxy:8080`），使用 imgproxy 的 raw upload 模式。
 
 ```
 POST /api/img?w=200&h=150&fit=cover&fmt=webp&q=80

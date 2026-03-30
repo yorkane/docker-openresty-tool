@@ -2,8 +2,8 @@
 -- Direct HTTP client for imgproxy using Lua cosocket
 -- Bypasses nginx's proxy_pass URL parsing issues with imgproxy's local:// URL scheme
 --
--- Supports multiple upstream servers via IMGPROXY_UPSTREAM env var:
---   IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
+-- Supports multiple upstream servers via OR_IMGPROXY_UPSTREAM env var:
+--   OR_IMGPROXY_UPSTREAM=imgproxy1:8080,imgproxy2:8080,imgproxy3:8080
 --   If not set, uses default imgproxy:8080 (single server)
 -- Uses round-robin load balancing across upstream servers.
 

@@ -54,9 +54,11 @@ local function is_ip_whitelisted(client_ip, whitelist_str)
     return false
 end
 
--- Parse IMGPROXY_UPSTREAM and extract IPs for automatic whitelist
+-- Parse OR_IMGPROXY_UPSTREAM and extract IPs for automatic whitelist
 local function get_imgproxy_upstream_ips()
-    local upstream = os.getenv("IMGPROXY_UPSTREAM") or ""
+    local ok, env = pcall(require, "env")
+    env = (ok and env) or {}
+    local upstream = env.OR_IMGPROXY_UPSTREAM or ""
     if upstream == "" then
         return ""
     end
