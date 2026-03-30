@@ -312,6 +312,8 @@ end
 -- url_prefix is used to generate directory-listing links.
 -- ──────────────────────────────────────────────────────────
 local function serve_zip(webdav_root, zip_rel, inner, url_prefix)
+    -- Decode URL-encoded characters (e.g. %5B → [) to match actual filesystem paths
+    zip_rel = ngx.unescape_uri(zip_rel)
     local zip_path = webdav_root .. "/" .. zip_rel
     if not file_exists(zip_path) then
         ngx.log(ngx.WARN, "[zipfs] zip not found: ", zip_path)
