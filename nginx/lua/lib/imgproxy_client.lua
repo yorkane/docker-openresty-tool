@@ -127,7 +127,17 @@ function _M.process_zip(zip_rel, args)
     local params = extract_params(args)
 
     -- Build internal ZIP URL: http://yot:80/zip/<zip_rel>
-    local zip_url = WEBDAV_ENDPOINT .. "/zip/" .. zip_rel_decoded
+    -- Escape each path segment to properly encode Japanese/UTF-8 chars
+    -- ngx.escape_uri encodes non-ASCII chars as %XX bytes
+    -- build_http_url will then escape any % that are NOT part of %XX (should be none)
+    local function encode_path(path)
+        local result = {}
+        for segment in path:gmatch("([^/]+)") do
+            result[#result+1] = ngx.escape_uri(segment)
+        end
+        return table.concat(result, "/")
+    end
+    local zip_url = WEBDAV_ENDPOINT .. "/zip/" .. encode_path(zip_rel_decoded)
     ngx.log(ngx.INFO, "[imgproxy_client] process_zip: WEBDAV_ENDPOINT=", WEBDAV_ENDPOINT,
             " zip_rel_decoded=", zip_rel_decoded, " zip_url=", zip_url)
 

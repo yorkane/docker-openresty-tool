@@ -141,10 +141,33 @@ end
 -- source_url: full HTTP URL to the source image
 -- processing: processing string from build_processing()
 function _M.build_http_url(source_url, processing)
-    -- Percent-encode the source URL to prevent imgproxy from misinterpreting
-    -- encoded path segments (e.g. %E4BC9A → é) as escape sequences.
-    -- Each % in %XX must be escaped as %25.
-    local encoded_source = source_url:gsub("%%", "%%25")
+    -- Escape % that are NOT part of valid %XX hex sequences to prevent
+    -- imgproxy from misinterpreting encoded path segments (e.g. %E4BC9A → é)
+    local function escape_percent(url)
+        local result = {}
+        local i = 1
+        while i <= #url do
+            local c = url:sub(i, i)
+            if c == "%" then
+                local next2 = url:sub(i+1, i+2)
+                -- Check if %XX (two hex digits) - keep as is
+                if next2 and next2:match("^[0-9A-Fa-f][0-9A-Fa-f]$") then
+                    result[#result+1] = "%" .. next2
+                    i = i + 3
+                else
+                    -- Lonely % or invalid sequence - escape it
+                    result[#result+1] = "%25"
+                    i = i + 1
+                end
+            else
+                result[#result+1] = c
+                i = i + 1
+            end
+        end
+        return table.concat(result)
+    end
+
+    local encoded_source = escape_percent(source_url)
     ngx.log(ngx.INFO, "[imgproxy] build_http_url: original_source=", source_url,
             " encoded_source=", encoded_source)
     return "/insecure/" .. processing .. "/plain/" .. encoded_source
