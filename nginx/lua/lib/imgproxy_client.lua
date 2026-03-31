@@ -128,9 +128,12 @@ function _M.process_zip(zip_rel, args)
 
     -- Build internal ZIP URL: http://yot:80/zip/<zip_rel>
     local zip_url = WEBDAV_ENDPOINT .. "/zip/" .. zip_rel_decoded
+    ngx.log(ngx.INFO, "[imgproxy_client] process_zip: WEBDAV_ENDPOINT=", WEBDAV_ENDPOINT,
+            " zip_rel_decoded=", zip_rel_decoded, " zip_url=", zip_url)
 
     local result, err, status = _M.process_http(zip_url, params, nil)
     if not result then
+        ngx.log(ngx.ERR, "[imgproxy_client] process_zip error: ", err, " status=", status)
         return nil, err, status
     end
 

@@ -1673,7 +1673,7 @@ const GalleryView = {
       const internalPath = internalDir ? internalDir + '/' + coverItem.name : coverItem.name;
       // 使用 /imgproxy/zip/ 端点进行图片处理和缓存
       const encodedInternal = internalPath.split('/').map(s => encodeURIComponent(s)).join('/');
-      url = '/imgproxy/zip' + encodeFilePath(path) + '/' + encodedInternal + '?w=360&h=504&fit=cover&q=82';
+      url = '/imgproxy/zip' + encodeFilePath(path) + '/' + encodedInternal + '?w=360&h=504&fit=cover&fmt=webp&q=82';
     } else {
       // 普通目录封面走 /img/ 做 vips 缩略图（360px 宽，cover 模式）
       const rawUrl = fileUrl(coverPath, coverItem.name);
@@ -2315,7 +2315,7 @@ const Reader = {
         const internalPath = afterZip.slice(lastSlash + 1);
         const encodedArchive = archivePath.split('/').map(s => encodeURIComponent(s)).join('/');
         const encodedInternal = internalPath.split('/').map(s => encodeURIComponent(s)).join('/');
-        thumbUrl = '/imgproxy/zip' + encodedArchive + '/' + encodedInternal + '?w=360&h=360&fit=cover&q=75';
+        thumbUrl = '/imgproxy/zip' + encodedArchive + '/' + encodedInternal + '?w=360&h=360&fit=cover&fmt=webp&q=75';
       } else {
         thumbUrl = item.url; // fallback
       }
